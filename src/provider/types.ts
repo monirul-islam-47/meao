@@ -145,6 +145,8 @@ export interface StreamEvent {
   contentBlock?: ContentBlock
   message?: Partial<ProviderResponse>
   error?: { type: string; message: string }
+  /** Usage info (reported in message_delta at end of stream) */
+  usage?: Partial<TokenUsage>
 }
 
 /**

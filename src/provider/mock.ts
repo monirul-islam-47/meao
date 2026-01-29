@@ -191,10 +191,11 @@ export class MockProvider implements Provider {
       }
     }
 
-    // Emit message_delta with stop reason
+    // Emit message_delta with stop reason and usage (like real Anthropic API)
     yield {
       type: 'message_delta',
       delta: { stop_reason: fullResponse.stopReason },
+      usage: { outputTokens: fullResponse.usage.outputTokens },
     }
 
     // Emit message_stop

@@ -280,6 +280,12 @@ export class AnthropicProvider implements Provider {
           delta: event.delta
             ? { stop_reason: event.delta.stop_reason }
             : undefined,
+          // Capture usage from message_delta (output tokens reported at end of stream)
+          usage: event.usage
+            ? {
+                outputTokens: event.usage.output_tokens ?? 0,
+              }
+            : undefined,
         }
 
       case 'message_stop':

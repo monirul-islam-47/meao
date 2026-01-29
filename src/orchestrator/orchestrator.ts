@@ -363,9 +363,9 @@ export class Orchestrator extends TypedEventEmitter {
             if ((event.delta as any)?.stop_reason) {
               stopReason = (event.delta as any).stop_reason
             }
-            // Track output tokens if provided
-            if ((event as any).usage?.output_tokens) {
-              usage.outputTokens = (event as any).usage.output_tokens
+            // Track output tokens if provided (Anthropic reports usage at end of stream)
+            if (event.usage?.outputTokens) {
+              usage.outputTokens = event.usage.outputTokens
             }
             break
         }
