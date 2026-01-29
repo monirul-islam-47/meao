@@ -371,5 +371,40 @@ describe('SqliteVectorStore', () => {
       expect(results).toHaveLength(1)
       expect(results[0].id).toBe('user1')
     })
+
+    it('getByUser returns entry only if owned by user', async () => {
+      await store.insert(createEntry({ id: 'user1-entry', userId: 'user-1' }))
+
+      // User-1 can get their own entry
+      const entry = await store.getByUser('user-1', 'user1-entry')
+      expect(entry).not.toBeNull()
+      expect(entry?.id).toBe('user1-entry')
+
+      // User-2 cannot get user-1's entry
+      const notFound = await store.getByUser('user-2', 'user1-entry')
+      expect(notFound).toBeNull()
+    })
+
+    it('getByUser throws if userId is missing', async () => {
+      await expect(store.getByUser('', 'some-id')).rejects.toThrow('userId is required')
+    })
+
+    it('deleteByUser only deletes if owned by user', async () => {
+      await store.insert(createEntry({ id: 'user1-entry', userId: 'user-1' }))
+
+      // User-2 cannot delete user-1's entry
+      const notDeleted = await store.deleteByUser('user-2', 'user1-entry')
+      expect(notDeleted).toBe(false)
+      expect(await store.get('user1-entry')).not.toBeNull()
+
+      // User-1 can delete their own entry
+      const deleted = await store.deleteByUser('user-1', 'user1-entry')
+      expect(deleted).toBe(true)
+      expect(await store.get('user1-entry')).toBeNull()
+    })
+
+    it('deleteByUser throws if userId is missing', async () => {
+      await expect(store.deleteByUser('', 'some-id')).rejects.toThrow('userId is required')
+    })
   })
 })

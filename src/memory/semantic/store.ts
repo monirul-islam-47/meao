@@ -17,7 +17,9 @@ export interface ISemanticStore {
   insert(fact: SemanticFact): Promise<void>
   update(id: string, updates: Partial<Omit<SemanticFact, 'id' | 'type'>>): Promise<boolean>
   get(id: string): Promise<SemanticFact | null>
+  getByUser(userId: string, id: string): Promise<SemanticFact | null> // INV-5: User-scoped get
   delete(id: string): Promise<boolean>
+  deleteByUser(userId: string, id: string): Promise<boolean> // INV-5: User-scoped delete
   query(filter: SemanticQueryFilter): Promise<SemanticFact[]>
   count(userId?: string): Promise<number>
   close(): void
@@ -130,6 +132,8 @@ export class SqliteSemanticStore implements ISemanticStore {
 
   /**
    * Get fact by ID.
+   *
+   * WARNING: Not user-scoped. Use getByUser() for user data isolation (INV-5).
    */
   async get(id: string): Promise<SemanticFact | null> {
     const row = this.db
@@ -141,12 +145,48 @@ export class SqliteSemanticStore implements ISemanticStore {
   }
 
   /**
+   * Get fact by ID with user scope (INV-5).
+   *
+   * Only returns the fact if it belongs to the specified user.
+   */
+  async getByUser(userId: string, id: string): Promise<SemanticFact | null> {
+    if (!userId || userId.trim() === '') {
+      throw new Error('userId is required for getByUser (INV-5: user data isolation)')
+    }
+
+    const row = this.db
+      .prepare('SELECT * FROM semantic_facts WHERE id = ? AND user_id = ?')
+      .get(id, userId) as any
+
+    if (!row) return null
+    return this.rowToFact(row)
+  }
+
+  /**
    * Delete fact by ID.
+   *
+   * WARNING: Not user-scoped. Use deleteByUser() for user data isolation (INV-5).
    */
   async delete(id: string): Promise<boolean> {
     const result = this.db
       .prepare('DELETE FROM semantic_facts WHERE id = ?')
       .run(id)
+    return result.changes > 0
+  }
+
+  /**
+   * Delete fact by ID with user scope (INV-5).
+   *
+   * Only deletes the fact if it belongs to the specified user.
+   */
+  async deleteByUser(userId: string, id: string): Promise<boolean> {
+    if (!userId || userId.trim() === '') {
+      throw new Error('userId is required for deleteByUser (INV-5: user data isolation)')
+    }
+
+    const result = this.db
+      .prepare('DELETE FROM semantic_facts WHERE id = ? AND user_id = ?')
+      .run(id, userId)
     return result.changes > 0
   }
 

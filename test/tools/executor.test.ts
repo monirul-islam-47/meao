@@ -54,7 +54,10 @@ describe('ToolExecutor', () => {
       const result = await executor.execute(tool, { input: 'hello' }, context)
 
       expect(result.success).toBe(true)
-      expect(result.output).toBe('result')
+      // Output is wrapped with DATA markers for prompt-injection hardening
+      expect(result.output).toContain('[TOOL OUTPUT: test - BEGIN DATA')
+      expect(result.output).toContain('result')
+      expect(result.output).toContain('[TOOL OUTPUT: test - END DATA]')
       expect(tool.execute).toHaveBeenCalledWith(
         { input: 'hello' },
         context

@@ -7,6 +7,7 @@ import type {
 import { OUTPUT_CAPS, computeApprovalId } from './types.js'
 import { ApprovalManager } from './approvals.js'
 import { secretDetector } from '../security/secrets/index.js'
+import { wrapToolOutput } from '../security/sanitize/index.js'
 import { labelOutput } from '../security/labels/output.js'
 import { networkGuard } from '../security/network/index.js'
 import type { ContentLabel } from '../security/labels/types.js'
@@ -77,10 +78,13 @@ export class ToolExecutor {
       const truncatedOutput = this.truncateOutput(redacted, tool.capability.name)
       const truncated = truncatedOutput.length < redacted.length
 
-      // 8. Apply labels
+      // 8. Wrap output with DATA markers (prompt-injection hardening)
+      const wrappedOutput = wrapToolOutput(tool.name, truncatedOutput)
+
+      // 9. Apply labels
       const label = labelOutput(tool.capability, findings)
 
-      // 9. Emit audit event
+      // 10. Emit audit event
       await this.auditExecution(tool, validatedArgs, context, {
         success: rawOutput.success,
         executionTime: Date.now() - startTime,
@@ -90,7 +94,7 @@ export class ToolExecutor {
 
       return {
         success: rawOutput.success,
-        output: truncatedOutput,
+        output: wrappedOutput,
         label,
         truncated,
         executionTime: Date.now() - startTime,

@@ -230,6 +230,41 @@ describe('SqliteSemanticStore', () => {
       expect(await store.count('user-2')).toBe(1)
       expect(await store.count()).toBe(3) // Total without userId
     })
+
+    it('getByUser returns fact only if owned by user', async () => {
+      await store.insert(createFact({ id: 'user1-fact', userId: 'user-1' }))
+
+      // User-1 can get their own fact
+      const fact = await store.getByUser('user-1', 'user1-fact')
+      expect(fact).not.toBeNull()
+      expect(fact?.id).toBe('user1-fact')
+
+      // User-2 cannot get user-1's fact
+      const notFound = await store.getByUser('user-2', 'user1-fact')
+      expect(notFound).toBeNull()
+    })
+
+    it('getByUser throws if userId is missing', async () => {
+      await expect(store.getByUser('', 'some-id')).rejects.toThrow('userId is required')
+    })
+
+    it('deleteByUser only deletes if owned by user', async () => {
+      await store.insert(createFact({ id: 'user1-fact', userId: 'user-1' }))
+
+      // User-2 cannot delete user-1's fact
+      const notDeleted = await store.deleteByUser('user-2', 'user1-fact')
+      expect(notDeleted).toBe(false)
+      expect(await store.get('user1-fact')).not.toBeNull()
+
+      // User-1 can delete their own fact
+      const deleted = await store.deleteByUser('user-1', 'user1-fact')
+      expect(deleted).toBe(true)
+      expect(await store.get('user1-fact')).toBeNull()
+    })
+
+    it('deleteByUser throws if userId is missing', async () => {
+      await expect(store.deleteByUser('', 'some-id')).rejects.toThrow('userId is required')
+    })
   })
 
   describe('update', () => {
