@@ -1,6 +1,6 @@
 # Milestone 0: Repository Setup
 
-**Status:** NOT STARTED
+**Status:** COMPLETE
 **Scope:** MVP
 **Dependencies:** None
 **PR:** PR0

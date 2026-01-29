@@ -1,6 +1,6 @@
 # Milestone 4: Sandbox System
 
-**Status:** NOT STARTED
+**Status:** COMPLETE
 **Scope:** MVP (process + container with network=none). Proxy egress is Phase 3.
 **Dependencies:** M3 (Audit Full)
 **PR:** PR6

@@ -1,6 +1,6 @@
 # Milestone 5: Tool System
 
-**Status:** NOT STARTED
+**Status:** COMPLETE
 **Scope:** MVP (read, write, web_fetch, bash). Edit is Phase 2.
 **Dependencies:** M3 (Audit Full), M4 (Sandbox)
 **PR:** PR5
@@ -94,7 +94,7 @@ export interface ToolResult {
 
 export interface ToolCapability {
   approval: {
-    level: 'auto' | 'ask' | 'always_deny'
+    level: 'auto' | 'ask' | 'always'
     dangerPatterns?: RegExp[]
     conditions?: {
       methodRequiresApproval?: string[]
