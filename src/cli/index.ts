@@ -4,7 +4,7 @@
 
 import { parseArgs } from './args.js'
 import { runDemo, listDemos, showDemo } from './demo.js'
-import { startSession } from './session.js'
+import { startSession, listSessions } from './session.js'
 
 export async function main(): Promise<void> {
   const { command, args, flags } = parseArgs(process.argv.slice(2))
@@ -69,7 +69,7 @@ async function handleSessions(args: string[], _flags: Record<string, boolean | s
 
   switch (subcommand) {
     case 'list':
-      console.log('Session listing not yet implemented (M8.5)')
+      await listSessions()
       break
     default:
       console.log(`Usage: meao sessions <list>
