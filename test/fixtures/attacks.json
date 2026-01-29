@@ -29,7 +29,7 @@
     "awsKey": "AKIAIOSFODNN7ABCDEFG",
     "privateKey": "-----BEGIN RSA PRIVATE KEY-----\nMIIEowIBAAKCAQEA0Z3VS5JJcds3xfn/ygWyF8PbnGy\n-----END RSA PRIVATE KEY-----",
     "jwtToken": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c",
-    "slackToken": "SLACK_PLACEHOLDER"
+    "slackToken": "SLACK_TOKEN_PLACEHOLDER_FOR_TESTING"
   },
   "secretBypassAttempts": [
     "s k - a n t - a p i 0 3 - A B C D",
