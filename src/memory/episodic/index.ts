@@ -164,23 +164,29 @@ export class EpisodicMemory {
   }
 
   /**
-   * Get entry by ID.
+   * Get entry by ID with user scope (INV-5).
    *
+   * Enforces user data isolation by requiring userId.
+   *
+   * @param userId - User ID for data isolation
    * @param id - Entry ID
-   * @returns Entry or null if not found
+   * @returns Entry or null if not found (or not owned by user)
    */
-  async get(id: string): Promise<EpisodicEntry | null> {
-    return this.store.get(id)
+  async get(userId: string, id: string): Promise<EpisodicEntry | null> {
+    return this.store.getByUser(userId, id)
   }
 
   /**
-   * Delete entry by ID.
+   * Delete entry by ID with user scope (INV-5).
    *
+   * Enforces user data isolation by requiring userId.
+   *
+   * @param userId - User ID for data isolation
    * @param id - Entry ID
    * @returns True if deleted
    */
-  async delete(id: string): Promise<boolean> {
-    return this.store.delete(id)
+  async delete(userId: string, id: string): Promise<boolean> {
+    return this.store.deleteByUser(userId, id)
   }
 
   /**

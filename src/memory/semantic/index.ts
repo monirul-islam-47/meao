@@ -206,16 +206,19 @@ export class SemanticMemory {
   }
 
   /**
-   * Update an existing fact.
+   * Update an existing fact with user scope (INV-5).
    *
+   * Enforces user data isolation by requiring userId.
    * Only allows updating confidence, metadata, and verification.
    * Does not allow changing the core triple (subject, predicate, object).
    *
+   * @param userId - User ID for data isolation
    * @param id - Fact ID
    * @param updates - Fields to update
-   * @returns True if updated
+   * @returns True if updated (false if not found or not owned by user)
    */
   async update(
+    userId: string,
     id: string,
     updates: {
       confidence?: number
@@ -223,7 +226,7 @@ export class SemanticMemory {
       metadata?: Record<string, unknown>
     }
   ): Promise<boolean> {
-    const existing = await this.store.get(id)
+    const existing = await this.store.getByUser(userId, id)
     if (!existing) return false
 
     const factUpdates: Partial<Omit<SemanticFact, 'id' | 'type'>> = {}
@@ -247,23 +250,29 @@ export class SemanticMemory {
   }
 
   /**
-   * Get fact by ID.
+   * Get fact by ID with user scope (INV-5).
    *
+   * Enforces user data isolation by requiring userId.
+   *
+   * @param userId - User ID for data isolation
    * @param id - Fact ID
-   * @returns Fact or null if not found
+   * @returns Fact or null if not found (or not owned by user)
    */
-  async get(id: string): Promise<SemanticFact | null> {
-    return this.store.get(id)
+  async get(userId: string, id: string): Promise<SemanticFact | null> {
+    return this.store.getByUser(userId, id)
   }
 
   /**
-   * Delete fact by ID.
+   * Delete fact by ID with user scope (INV-5).
    *
+   * Enforces user data isolation by requiring userId.
+   *
+   * @param userId - User ID for data isolation
    * @param id - Fact ID
    * @returns True if deleted
    */
-  async delete(id: string): Promise<boolean> {
-    return this.store.delete(id)
+  async delete(userId: string, id: string): Promise<boolean> {
+    return this.store.deleteByUser(userId, id)
   }
 
   /**

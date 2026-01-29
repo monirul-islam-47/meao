@@ -118,7 +118,7 @@ describe('SemanticMemory', () => {
         label: createLabel(),
       })
 
-      const fact = await memory.get(result.entryId!)
+      const fact = await memory.get('test-user-1', result.entryId!)
 
       expect(fact).not.toBeNull()
       expect(fact?.subject).toBe('user')
@@ -136,7 +136,7 @@ describe('SemanticMemory', () => {
         label: createLabel(),
       })
 
-      const fact = await memory.get(result.entryId!)
+      const fact = await memory.get('test-user-1', result.entryId!)
       expect(fact?.confidence).toBe(1.0)
     })
 
@@ -151,7 +151,7 @@ describe('SemanticMemory', () => {
         confidence: 0.75,
       })
 
-      const fact = await memory.get(result.entryId!)
+      const fact = await memory.get('test-user-1', result.entryId!)
       expect(fact?.confidence).toBe(0.75)
     })
 
@@ -169,7 +169,7 @@ describe('SemanticMemory', () => {
         },
       })
 
-      const fact = await memory.get(result.entryId!)
+      const fact = await memory.get('test-user-1', result.entryId!)
       expect(fact?.source.origin).toBe('file-analysis')
       expect(fact?.source.verifiedBy).toBe('user@example.com')
     })
@@ -184,7 +184,7 @@ describe('SemanticMemory', () => {
         label: createLabel(),
       })
 
-      const fact = await memory.get(result.entryId!)
+      const fact = await memory.get('test-user-1', result.entryId!)
       expect(fact?.content).toContain('[REDACTED')
       expect(fact?.metadata.redacted).toBe(true)
     })
@@ -276,7 +276,7 @@ describe('SemanticMemory', () => {
         userConfirmed: true,
       })
 
-      const fact = await memoryWithAudit.get(result.entryId!)
+      const fact = await memoryWithAudit.get('test-user-1', result.entryId!)
       const promotion = fact?.metadata.labelPromotion as {
         scope: string
         originalTrustLevel: string
@@ -305,7 +305,7 @@ describe('SemanticMemory', () => {
         userConfirmed: true,
       })
 
-      const fact = await memoryWithAudit.get(result.entryId!)
+      const fact = await memoryWithAudit.get('test-user-1', result.entryId!)
       expect(fact?.label.trustLevel).toBe('user')
     })
 
@@ -368,9 +368,9 @@ describe('SemanticMemory', () => {
         confidence: 0.5,
       })
 
-      await memory.update(result.entryId!, { confidence: 0.9 })
+      await memory.update('test-user-1', result.entryId!, { confidence: 0.9 })
 
-      const fact = await memory.get(result.entryId!)
+      const fact = await memory.get('test-user-1', result.entryId!)
       expect(fact?.confidence).toBe(0.9)
     })
 
@@ -384,9 +384,9 @@ describe('SemanticMemory', () => {
         label: createLabel(),
       })
 
-      await memory.update(result.entryId!, { verifiedBy: 'admin@example.com' })
+      await memory.update('test-user-1', result.entryId!, { verifiedBy: 'admin@example.com' })
 
-      const fact = await memory.get(result.entryId!)
+      const fact = await memory.get('test-user-1', result.entryId!)
       expect(fact?.source.verifiedBy).toBe('admin@example.com')
     })
 
@@ -401,15 +401,15 @@ describe('SemanticMemory', () => {
         metadata: { existing: 'value' },
       })
 
-      await memory.update(result.entryId!, { metadata: { new: 'data' } })
+      await memory.update('test-user-1', result.entryId!, { metadata: { new: 'data' } })
 
-      const fact = await memory.get(result.entryId!)
+      const fact = await memory.get('test-user-1', result.entryId!)
       expect(fact?.metadata.existing).toBe('value')
       expect(fact?.metadata.new).toBe('data')
     })
 
     it('returns false for non-existent id', async () => {
-      const updated = await memory.update('non-existent', { confidence: 0.9 })
+      const updated = await memory.update('test-user-1', 'non-existent', { confidence: 0.9 })
       expect(updated).toBe(false)
     })
   })
@@ -496,14 +496,14 @@ describe('SemanticMemory', () => {
         label: createLabel(),
       })
 
-      const deleted = await memory.delete(result.entryId!)
+      const deleted = await memory.delete('test-user-1', result.entryId!)
 
       expect(deleted).toBe(true)
-      expect(await memory.get(result.entryId!)).toBeNull()
+      expect(await memory.get('test-user-1', result.entryId!)).toBeNull()
     })
 
     it('returns false for non-existent id', async () => {
-      const deleted = await memory.delete('non-existent')
+      const deleted = await memory.delete('test-user-1', 'non-existent')
       expect(deleted).toBe(false)
     })
   })

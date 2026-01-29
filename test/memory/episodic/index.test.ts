@@ -51,7 +51,7 @@ describe('EpisodicMemory', () => {
         label: createLabel(),
       })
 
-      const entry = await memory.get(id)
+      const entry = await memory.get('test-user-1', id)
 
       expect(entry).not.toBeNull()
       expect(entry?.content).toBe('Hello world')
@@ -68,7 +68,7 @@ describe('EpisodicMemory', () => {
         label: createLabel(),
       })
 
-      const entry = await memory.get(id)
+      const entry = await memory.get('test-user-1', id)
 
       expect(entry?.embedding).toBeDefined()
       expect(entry?.embedding.length).toBe(64)
@@ -84,7 +84,7 @@ describe('EpisodicMemory', () => {
         label: createLabel(),
       })
 
-      const entry = await memory.get(id)
+      const entry = await memory.get('test-user-1', id)
 
       expect(entry?.content).toContain('[REDACTED')
       expect(entry?.metadata.redacted).toBe(true)
@@ -102,7 +102,7 @@ describe('EpisodicMemory', () => {
         label,
       })
 
-      const entry = await memory.get(id)
+      const entry = await memory.get('test-user-1', id)
 
       expect(entry?.label.trustLevel).toBe('untrusted')
     })
@@ -118,7 +118,7 @@ describe('EpisodicMemory', () => {
         metadata: { custom: 'value' },
       })
 
-      const entry = await memory.get(id)
+      const entry = await memory.get('test-user-1', id)
 
       expect(entry?.metadata.custom).toBe('value')
     })
@@ -277,14 +277,14 @@ describe('EpisodicMemory', () => {
         label: createLabel(),
       })
 
-      const deleted = await memory.delete(id)
+      const deleted = await memory.delete('test-user-1', id)
 
       expect(deleted).toBe(true)
-      expect(await memory.get(id)).toBeNull()
+      expect(await memory.get('test-user-1', id)).toBeNull()
     })
 
     it('returns false for non-existent id', async () => {
-      const deleted = await memory.delete('non-existent')
+      const deleted = await memory.delete('test-user-1', 'non-existent')
       expect(deleted).toBe(false)
     })
   })
