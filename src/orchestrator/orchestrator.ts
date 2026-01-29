@@ -12,7 +12,6 @@ import { TypedEventEmitter } from '../channel/emitter.js'
 import type {
   ChannelMessage,
   UserMessage,
-  ApprovalResponseMessage,
 } from '../channel/types.js'
 import type {
   Provider,
@@ -41,10 +40,6 @@ export class Orchestrator extends TypedEventEmitter {
   private deps: OrchestratorDependencies
   private session: Session
   private currentTurn: Turn | null = null
-  private pendingApproval: {
-    request: ApprovalRequest
-    resolve: (approved: boolean) => void
-  } | null = null
 
   constructor(
     deps: OrchestratorDependencies,
@@ -456,19 +451,28 @@ export class Orchestrator extends TypedEventEmitter {
       workDir: this.config.workDir,
     }
 
-    // Check if approval is needed
+    // Check if approval is needed using the ApprovalManager
     if (tool.capability.approval.level !== 'auto') {
       const approvalId = computeApprovalId(name, 'execute', JSON.stringify(args))
 
-      if (!this.session.approvals.includes(approvalId)) {
-        const approved = await this.requestApproval({
+      // Check if already approved in this session
+      if (!this.deps.approvalManager.hasApproval(context, approvalId)) {
+        const request: ApprovalRequest = {
           id: approvalId,
           tool: name,
           action: 'execute',
           target: this.formatToolTarget(args),
           reason: `Tool ${name} requires approval`,
           isDangerous: this.isDangerousTool(tool, args),
-        })
+        }
+
+        // Emit event for UI notification (non-blocking)
+        this.emit('approvalRequired' as any, request)
+
+        // Use approvalManager to get decision
+        this.setState('waiting_approval')
+        const approved = await this.deps.approvalManager.request(request, context)
+        this.setState('executing_tool')
 
         if (!approved) {
           return {
@@ -477,7 +481,8 @@ export class Orchestrator extends TypedEventEmitter {
           }
         }
 
-        this.session.approvals.push(approvalId)
+        // Remember approval for this session
+        this.deps.approvalManager.addApproval(context, approvalId)
       }
     }
 
@@ -487,46 +492,6 @@ export class Orchestrator extends TypedEventEmitter {
     return {
       success: result.success,
       output: result.output,
-    }
-  }
-
-  /**
-   * Request approval from user.
-   */
-  private async requestApproval(request: ApprovalRequest): Promise<boolean> {
-    this.setState('waiting_approval')
-
-    // Send approval request to channel
-    await this.deps.channel.send({
-      type: 'approval_request',
-      id: randomUUID(),
-      timestamp: new Date(),
-      sessionId: this.session.id,
-      tool: request.tool,
-      action: request.action,
-      target: request.target,
-      reason: request.reason,
-      isDangerous: request.isDangerous ?? false,
-      approvalId: request.id,
-    })
-
-    // Wait for response
-    return new Promise((resolve) => {
-      this.pendingApproval = { request, resolve }
-    })
-  }
-
-  /**
-   * Handle approval response.
-   */
-  private handleApprovalResponse(message: ApprovalResponseMessage): void {
-    if (this.pendingApproval) {
-      if (message.rememberSession || message.rememberAlways) {
-        // Remember approval for session
-        this.session.approvals.push(this.pendingApproval.request.id)
-      }
-      this.pendingApproval.resolve(message.approved)
-      this.pendingApproval = null
     }
   }
 
@@ -697,10 +662,8 @@ export class Orchestrator extends TypedEventEmitter {
             await this.processMessage((message as UserMessage).content)
           }
           break
-
-        case 'approval_response':
-          this.handleApprovalResponse(message as ApprovalResponseMessage)
-          break
+        // Note: approval_response is no longer handled here
+        // The ApprovalManager handles approval flow internally
       }
     })
   }

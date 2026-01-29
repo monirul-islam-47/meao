@@ -309,11 +309,7 @@ describe('Security Integration Tests', () => {
       // Session approval caching is tested in unit tests
     })
 
-    // Note: The orchestrator currently has its own approval flow that sends
-    // approval_request to the channel and waits for approval_response.
-    // It does not use the approvalManager passed in deps.
-    // TODO: Consider refactoring to use approvalManager for cleaner testability
-    it('sends approval request to channel for ask-level tools', async () => {
+    it('uses approvalManager for ask-level tools', async () => {
       const channel = createMockChannel()
       const provider = new MockProvider()
       const toolRegistry = new ToolRegistry()
@@ -331,6 +327,13 @@ describe('Security Integration Tests', () => {
         execute: async () => ({ success: true, output: 'executed' }),
       }
       toolRegistry.register(askTool)
+
+      // Track approval requests
+      const approvalRequests: any[] = []
+      const trackingApprovalManager = new ApprovalManager(async (request) => {
+        approvalRequests.push(request)
+        return true // Auto-approve
+      })
 
       let callCount = 0
       provider.addGenerator(() => {
@@ -359,40 +362,170 @@ describe('Security Integration Tests', () => {
           channel,
           provider,
           toolRegistry,
-          approvalManager: createAutoApproveManager(),
+          approvalManager: trackingApprovalManager,
           sandboxExecutor: new SandboxExecutor({ workDir: testDir }),
           auditLogger: auditLogger as any,
         },
         { streaming: false, workDir: testDir }
       )
 
-      // Start processing but don't await (it will hang waiting for approval)
-      const processPromise = orchestrator.processMessage('Use ask_tool')
+      await orchestrator.processMessage('Use ask_tool')
 
-      // Give it a moment to send the approval request
-      await new Promise((resolve) => setTimeout(resolve, 100))
+      // ApprovalManager should have received the request
+      expect(approvalRequests.length).toBe(1)
+      expect(approvalRequests[0].tool).toBe('ask_tool')
+      expect(approvalRequests[0].action).toBe('execute')
 
-      // Should have sent an approval request
-      const approvalRequests = channel.sentMessages.filter(
-        (m) => m.type === 'approval_request'
-      )
-      expect(approvalRequests.length).toBeGreaterThanOrEqual(1)
-
-      // Simulate approval response to unblock
-      channel.emit('message', {
-        type: 'approval_response',
-        approved: true,
-        approvalId: (approvalRequests[0] as any).approvalId,
-        rememberSession: true,
-      })
-
-      // Now it should complete
-      await processPromise
-
-      // Tool should have executed
+      // Tool should have executed (auto-approved)
       const toolResults = channel.sentMessages.filter((m) => m.type === 'tool_result') as any[]
       expect(toolResults).toHaveLength(1)
       expect(toolResults[0].success).toBe(true)
+    })
+
+    it('denies tool execution when approvalManager returns false', async () => {
+      const channel = createMockChannel()
+      const provider = new MockProvider()
+      const toolRegistry = new ToolRegistry()
+      const auditLogger = createMockAuditLogger()
+
+      const askTool: ToolPlugin = {
+        name: 'dangerous_tool',
+        description: 'Tool requiring approval',
+        parameters: z.object({}),
+        capability: {
+          name: 'dangerous_tool',
+          approval: { level: 'ask' },
+        },
+        actions: [],
+        execute: vi.fn().mockResolvedValue({ success: true, output: 'executed' }),
+      }
+      toolRegistry.register(askTool)
+
+      // Approval manager that denies all
+      const denyAllManager = new ApprovalManager(async () => false)
+
+      let callCount = 0
+      provider.addGenerator(() => {
+        callCount++
+        if (callCount === 1) {
+          return {
+            content: [
+              {
+                type: 'tool_use',
+                id: 'danger-1',
+                name: 'dangerous_tool',
+                input: {},
+              },
+            ],
+            stopReason: 'tool_use',
+          }
+        }
+        return {
+          content: [{ type: 'text', text: 'Tool denied' }],
+          stopReason: 'end_turn',
+        }
+      })
+
+      const orchestrator = new Orchestrator(
+        {
+          channel,
+          provider,
+          toolRegistry,
+          approvalManager: denyAllManager,
+          sandboxExecutor: new SandboxExecutor({ workDir: testDir }),
+          auditLogger: auditLogger as any,
+        },
+        { streaming: false, workDir: testDir }
+      )
+
+      await orchestrator.processMessage('Run dangerous tool')
+
+      // Tool should NOT have been executed
+      expect(askTool.execute).not.toHaveBeenCalled()
+
+      // Tool result should indicate denial
+      const toolResults = channel.sentMessages.filter((m) => m.type === 'tool_result') as any[]
+      expect(toolResults).toHaveLength(1)
+      expect(toolResults[0].success).toBe(false)
+      expect(toolResults[0].output).toContain('denied')
+    })
+
+    it('remembers approvals within a session', async () => {
+      const channel = createMockChannel()
+      const provider = new MockProvider()
+      const toolRegistry = new ToolRegistry()
+      const auditLogger = createMockAuditLogger()
+
+      let executeCount = 0
+      const askTool: ToolPlugin = {
+        name: 'ask_tool',
+        description: 'Tool requiring approval',
+        parameters: z.object({}),
+        capability: {
+          name: 'ask_tool',
+          approval: { level: 'ask' },
+        },
+        actions: [],
+        execute: async () => {
+          executeCount++
+          return { success: true, output: 'executed' }
+        },
+      }
+      toolRegistry.register(askTool)
+
+      // Track how many times approval is requested
+      let approvalCount = 0
+      const countingApprovalManager = new ApprovalManager(async () => {
+        approvalCount++
+        return true
+      })
+
+      let callCount = 0
+      provider.addGenerator(() => {
+        callCount++
+        if (callCount === 1 || callCount === 3) {
+          // Both turns try to use the tool
+          return {
+            content: [
+              {
+                type: 'tool_use',
+                id: `ask-${callCount}`,
+                name: 'ask_tool',
+                input: {},
+              },
+            ],
+            stopReason: 'tool_use',
+          }
+        }
+        return {
+          content: [{ type: 'text', text: 'Done' }],
+          stopReason: 'end_turn',
+        }
+      })
+
+      const orchestrator = new Orchestrator(
+        {
+          channel,
+          provider,
+          toolRegistry,
+          approvalManager: countingApprovalManager,
+          sandboxExecutor: new SandboxExecutor({ workDir: testDir }),
+          auditLogger: auditLogger as any,
+        },
+        { streaming: false, workDir: testDir }
+      )
+
+      // First turn - should ask for approval
+      await orchestrator.processMessage('Use ask_tool')
+
+      // Second turn - should reuse approval (same tool, same args pattern)
+      await orchestrator.processMessage('Use ask_tool again')
+
+      // Tool should have been executed twice
+      expect(executeCount).toBe(2)
+
+      // Approval should only be requested once (reused from session)
+      expect(approvalCount).toBe(1)
     })
   })
 
