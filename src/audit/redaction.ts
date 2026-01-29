@@ -1,4 +1,5 @@
 import type { AuditEntry } from './schema.js'
+import { secretDetector } from '../security/secrets/index.js'
 
 /**
  * Fields that must NEVER appear in audit logs.
@@ -22,7 +23,7 @@ const NEVER_LOG_FIELDS = [
 const MAX_ERROR_MESSAGE_LENGTH = 500
 
 /**
- * Sanitize an audit entry by removing NEVER_LOG fields and truncating error messages.
+ * Sanitize an audit entry by removing NEVER_LOG fields and sanitizing error messages.
  *
  * This is the SINGLE CHOKE POINT for audit entry sanitization.
  * All audit entries MUST pass through this function before being written.
@@ -36,15 +37,30 @@ export function sanitizeAuditEntry(entry: AuditEntry): AuditEntry {
     deletePath(sanitized as unknown as Record<string, unknown>, field)
   }
 
-  // Truncate error messages
-  // (SecretDetector integration added in M3)
+  // Sanitize error messages through SecretDetector + truncation (M3)
   if (sanitized.metadata?.errorMessage) {
-    sanitized.metadata.errorMessage = String(
-      sanitized.metadata.errorMessage
-    ).slice(0, MAX_ERROR_MESSAGE_LENGTH)
+    sanitized.metadata.errorMessage = sanitizeErrorMessage(
+      String(sanitized.metadata.errorMessage)
+    )
   }
 
   return sanitized
+}
+
+/**
+ * Sanitize error message by redacting secrets and truncating.
+ *
+ * Uses secretDetector singleton for consistent secret detection across the system.
+ */
+export function sanitizeErrorMessage(msg: string): string {
+  // 1. Run through secretDetector singleton
+  const { redacted } = secretDetector.redact(msg, {
+    minConfidence: 'probable',
+    preserveType: false, // Just show [REDACTED] in error messages
+  })
+
+  // 2. Truncate to max length
+  return redacted.slice(0, MAX_ERROR_MESSAGE_LENGTH)
 }
 
 /**

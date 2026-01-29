@@ -3,7 +3,7 @@ export { AuditEntrySchema, type AuditEntry } from './schema.js'
 export type { AuditCategory, AuditSeverity } from './types.js'
 
 // Redaction
-export { sanitizeAuditEntry } from './redaction.js'
+export { sanitizeAuditEntry, sanitizeErrorMessage } from './redaction.js'
 
 // Store
 export type { AuditStore, AuditFilter } from './store/index.js'
