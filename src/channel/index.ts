@@ -28,3 +28,18 @@ export { BaseChannel } from './base.js'
 
 // CLI channel
 export { CLIChannel, type CLIChannelOptions } from './cli.js'
+
+// Telegram channel
+export {
+  TelegramChannel,
+  type TelegramChannelConfig,
+  type DmPolicy,
+  RateLimiter,
+  type RateLimitConfig,
+  TelegramApprovalUI,
+} from './telegram/index.js'
+export {
+  createTelegramChannel,
+  createAndConnectTelegramChannel,
+  type CreateTelegramChannelOptions,
+} from './telegram/bot.js'

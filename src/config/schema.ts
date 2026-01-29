@@ -35,7 +35,7 @@ export const ServerConfigSchema = z.object({
   timeout: z.number().int().positive().default(120000),
 })
 
-// Channel configuration
+// Channel configuration (generic)
 export const ChannelConfigSchema = z.object({
   enabled: z.boolean().default(true),
   dmPolicy: z
@@ -49,6 +49,20 @@ export const ChannelConfigSchema = z.object({
     })
     .optional(),
   botTokenRef: z.string().optional(),
+})
+
+// Telegram channel configuration
+export const TelegramChannelConfigSchema = ChannelConfigSchema.extend({
+  /** Telegram user ID of the bot owner */
+  ownerId: z.string().optional(),
+  /** Internal UUID for the owner (maps to meao user ID) */
+  ownerUuid: z.string().uuid().optional(),
+  /** Webhook URL for webhook mode (uses polling if not set) */
+  webhookUrl: z.string().url().optional(),
+  /** Directory to store downloaded attachments */
+  attachmentDir: z.string().optional(),
+  /** Approval timeout in milliseconds */
+  approvalTimeout: z.number().int().positive().default(60000),
 })
 
 // Provider configuration
@@ -162,6 +176,7 @@ export type AppConfig = z.infer<typeof AppConfigSchema>
 export type OwnerConfig = z.infer<typeof OwnerConfigSchema>
 export type ServerConfig = z.infer<typeof ServerConfigSchema>
 export type ChannelConfig = z.infer<typeof ChannelConfigSchema>
+export type TelegramChannelConfig = z.infer<typeof TelegramChannelConfigSchema>
 export type ProviderConfig = z.infer<typeof ProviderConfigSchema>
 export type MemoryConfig = z.infer<typeof MemoryConfigSchema>
 export type SandboxConfig = z.infer<typeof SandboxConfigSchema>
