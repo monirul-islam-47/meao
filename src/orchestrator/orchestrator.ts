@@ -1,0 +1,707 @@
+import { randomUUID } from 'crypto'
+import type {
+  OrchestratorState,
+  OrchestratorConfig,
+  OrchestratorDependencies,
+  Session,
+  Turn,
+  ToolCall,
+} from './types.js'
+import { DEFAULT_CONFIG } from './types.js'
+import { TypedEventEmitter } from '../channel/emitter.js'
+import type {
+  ChannelMessage,
+  UserMessage,
+  ApprovalResponseMessage,
+} from '../channel/types.js'
+import type {
+  Provider,
+  ConversationMessage,
+  ContentBlock,
+  ToolUseBlock,
+  ToolResultBlock,
+  StreamEvent,
+  ProviderResponse,
+} from '../provider/types.js'
+import type { ToolPlugin, ToolContext, ApprovalRequest } from '../tools/types.js'
+import { computeApprovalId } from '../tools/types.js'
+
+/**
+ * Main orchestrator for coordinating conversations.
+ *
+ * The orchestrator manages:
+ * - Conversation flow between user and assistant
+ * - Tool execution with approval flow
+ * - Streaming responses
+ * - Session state and cost tracking
+ */
+export class Orchestrator extends TypedEventEmitter {
+  private state: OrchestratorState = 'idle'
+  private config: Required<OrchestratorConfig>
+  private deps: OrchestratorDependencies
+  private session: Session
+  private currentTurn: Turn | null = null
+  private pendingApproval: {
+    request: ApprovalRequest
+    resolve: (approved: boolean) => void
+  } | null = null
+
+  constructor(
+    deps: OrchestratorDependencies,
+    config: Partial<OrchestratorConfig> = {}
+  ) {
+    super()
+    this.deps = deps
+    this.config = { ...DEFAULT_CONFIG, ...config }
+
+    // Initialize session
+    this.session = this.createSession()
+
+    // Subscribe to channel messages
+    this.setupChannelListeners()
+  }
+
+  /**
+   * Get current state.
+   */
+  getState(): OrchestratorState {
+    return this.state
+  }
+
+  /**
+   * Get current session.
+   */
+  getSession(): Session {
+    return this.session
+  }
+
+  /**
+   * Start the orchestrator.
+   */
+  async start(): Promise<void> {
+    await this.deps.channel.connect()
+    await this.deps.auditLogger.info('session', 'started', {
+      sessionId: this.session.id,
+      config: {
+        model: this.config.model,
+        maxTurns: this.config.maxTurns,
+      },
+    })
+  }
+
+  /**
+   * Stop the orchestrator.
+   */
+  async stop(): Promise<void> {
+    await this.deps.channel.disconnect()
+    await this.deps.auditLogger.info('session', 'ended', {
+      sessionId: this.session.id,
+      totalTurns: this.session.turns.length,
+      totalUsage: this.session.totalUsage,
+      estimatedCost: this.session.estimatedCost,
+    })
+
+    this.emit('sessionEnd' as any, this.session)
+  }
+
+  /**
+   * Process a user message.
+   */
+  async processMessage(userMessage: string): Promise<void> {
+    if (this.state !== 'idle') {
+      throw new Error(`Cannot process message in state: ${this.state}`)
+    }
+
+    // Check turn limit
+    if (this.session.turns.length >= this.config.maxTurns) {
+      await this.sendError('max_turns_exceeded', 'Maximum turns reached for this session')
+      return
+    }
+
+    // Create turn
+    this.currentTurn = this.createTurn(userMessage)
+    this.emit('turnStart' as any, this.currentTurn)
+
+    this.setState('processing')
+
+    try {
+      // Add user message to conversation
+      this.session.messages.push({
+        role: 'user',
+        content: userMessage,
+      })
+
+      // Process the conversation loop
+      await this.conversationLoop()
+
+      // Complete turn
+      this.currentTurn.endTime = new Date()
+      this.session.turns.push(this.currentTurn)
+      this.emit('turnComplete' as any, this.currentTurn)
+    } catch (error) {
+      this.currentTurn.error =
+        error instanceof Error ? error.message : 'Unknown error'
+      this.currentTurn.endTime = new Date()
+      this.session.turns.push(this.currentTurn)
+
+      await this.sendError(
+        'processing_error',
+        error instanceof Error ? error.message : 'Unknown error'
+      )
+      this.emit('error' as any, error)
+    } finally {
+      this.currentTurn = null
+      this.setState('idle')
+    }
+  }
+
+  /**
+   * Main conversation loop.
+   */
+  private async conversationLoop(): Promise<void> {
+    let toolCallCount = 0
+
+    while (true) {
+      // Get model response
+      const response = await this.getModelResponse()
+
+      // Update usage
+      this.currentTurn!.usage.inputTokens += response.usage.inputTokens
+      this.currentTurn!.usage.outputTokens += response.usage.outputTokens
+      this.session.totalUsage.inputTokens += response.usage.inputTokens
+      this.session.totalUsage.outputTokens += response.usage.outputTokens
+      this.updateCost()
+
+      // Add assistant message to conversation
+      this.session.messages.push({
+        role: 'assistant',
+        content: response.content,
+      })
+
+      // Check for tool use
+      const toolUses = response.content.filter(
+        (b): b is ToolUseBlock => b.type === 'tool_use'
+      )
+
+      if (toolUses.length === 0 || response.stopReason !== 'tool_use') {
+        // No tool calls - extract text response
+        const textContent = response.content
+          .filter((b) => b.type === 'text')
+          .map((b) => (b as any).text)
+          .join('\n')
+
+        this.currentTurn!.assistantResponse = textContent
+
+        // Send final response
+        await this.sendAssistantMessage(textContent)
+        break
+      }
+
+      // Check tool call limit
+      toolCallCount += toolUses.length
+      if (toolCallCount > this.config.maxToolCallsPerTurn) {
+        await this.sendError(
+          'max_tool_calls_exceeded',
+          'Maximum tool calls per turn exceeded'
+        )
+        break
+      }
+
+      // Execute tool calls
+      const toolResults = await this.executeToolCalls(toolUses)
+
+      // Add tool results to conversation
+      this.session.messages.push({
+        role: 'user',
+        content: toolResults,
+      })
+    }
+  }
+
+  /**
+   * Get response from the model.
+   */
+  private async getModelResponse(): Promise<ProviderResponse> {
+    const options = {
+      model: this.config.model,
+      maxTokens: this.config.maxTokens,
+      system: this.config.systemPrompt,
+      tools: this.buildToolDefinitions(),
+    }
+
+    if (this.config.streaming) {
+      return this.streamModelResponse(options)
+    }
+
+    return this.deps.provider.createMessage(this.session.messages, options)
+  }
+
+  /**
+   * Stream model response.
+   */
+  private async streamModelResponse(
+    options: any
+  ): Promise<ProviderResponse> {
+    this.setState('streaming')
+
+    // Send stream start
+    const streamId = randomUUID()
+    await this.deps.channel.send({
+      type: 'stream_start',
+      id: streamId,
+      timestamp: new Date(),
+      sessionId: this.session.id,
+      streamId,
+    })
+
+    const content: ContentBlock[] = []
+    let stopReason: any = 'end_turn'
+    let usage = { inputTokens: 0, outputTokens: 0 }
+    let responseId = ''
+    let model = ''
+    let currentBlockIndex = -1
+    let currentText = ''
+
+    for await (const event of this.deps.provider.createMessageStream(
+      this.session.messages,
+      options
+    )) {
+      switch (event.type) {
+        case 'message_start':
+          if (event.message) {
+            responseId = event.message.id ?? ''
+            model = event.message.model ?? ''
+            if (event.message.usage) {
+              usage.inputTokens = event.message.usage.inputTokens ?? 0
+            }
+          }
+          break
+
+        case 'content_block_start':
+          currentBlockIndex = event.index ?? 0
+          if (event.contentBlock) {
+            content[currentBlockIndex] = event.contentBlock
+            if (event.contentBlock.type === 'text') {
+              currentText = ''
+            }
+          }
+          break
+
+        case 'content_block_delta':
+          if (event.delta?.type === 'text' && (event.delta as any).text) {
+            const delta = (event.delta as any).text
+            currentText += delta
+            // Stream text to channel
+            await this.deps.channel.send({
+              type: 'stream_delta',
+              id: randomUUID(),
+              timestamp: new Date(),
+              sessionId: this.session.id,
+              streamId,
+              delta,
+            })
+          }
+          break
+
+        case 'content_block_stop':
+          if (currentBlockIndex >= 0 && content[currentBlockIndex]?.type === 'text') {
+            (content[currentBlockIndex] as any).text = currentText
+          }
+          break
+
+        case 'message_delta':
+          if ((event.delta as any)?.stop_reason) {
+            stopReason = (event.delta as any).stop_reason
+          }
+          break
+      }
+    }
+
+    // Send stream end
+    await this.deps.channel.send({
+      type: 'stream_end',
+      id: randomUUID(),
+      timestamp: new Date(),
+      sessionId: this.session.id,
+      streamId,
+    })
+
+    this.setState('processing')
+
+    return {
+      id: responseId,
+      model,
+      content,
+      stopReason,
+      usage,
+    }
+  }
+
+  /**
+   * Execute tool calls.
+   */
+  private async executeToolCalls(
+    toolUses: ToolUseBlock[]
+  ): Promise<ToolResultBlock[]> {
+    this.setState('executing_tool')
+
+    const results: ToolResultBlock[] = []
+
+    for (const toolUse of toolUses) {
+      const toolCall: ToolCall = {
+        id: toolUse.id,
+        name: toolUse.name,
+        args: toolUse.input,
+      }
+      this.currentTurn!.toolCalls.push(toolCall)
+      this.emit('toolCallStart' as any, toolCall)
+
+      // Send tool use to channel
+      await this.deps.channel.send({
+        type: 'tool_use',
+        id: toolUse.id,
+        timestamp: new Date(),
+        sessionId: this.session.id,
+        name: toolUse.name,
+        args: toolUse.input,
+      })
+
+      try {
+        // Execute the tool
+        const startTime = Date.now()
+        const result = await this.executeTool(toolUse.name, toolUse.input, toolUse.id)
+        toolCall.executionTime = Date.now() - startTime
+
+        toolCall.result = {
+          success: result.success,
+          output: result.output,
+          label: result.label,
+        }
+
+        // Send tool result to channel
+        await this.deps.channel.send({
+          type: 'tool_result',
+          id: randomUUID(),
+          timestamp: new Date(),
+          sessionId: this.session.id,
+          name: toolUse.name,
+          success: result.success,
+          output: result.output,
+          correlationId: toolUse.id,
+        })
+
+        results.push({
+          type: 'tool_result',
+          tool_use_id: toolUse.id,
+          content: result.output,
+          is_error: !result.success,
+        })
+      } catch (error) {
+        const errorMsg = error instanceof Error ? error.message : 'Unknown error'
+        toolCall.result = {
+          success: false,
+          output: errorMsg,
+        }
+
+        // Send tool result to channel
+        await this.deps.channel.send({
+          type: 'tool_result',
+          id: randomUUID(),
+          timestamp: new Date(),
+          sessionId: this.session.id,
+          name: toolUse.name,
+          success: false,
+          output: `Error: ${errorMsg}`,
+          correlationId: toolUse.id,
+        })
+
+        results.push({
+          type: 'tool_result',
+          tool_use_id: toolUse.id,
+          content: `Error: ${errorMsg}`,
+          is_error: true,
+        })
+      }
+
+      this.emit('toolCallComplete' as any, toolCall)
+    }
+
+    this.setState('processing')
+    return results
+  }
+
+  /**
+   * Execute a single tool.
+   */
+  private async executeTool(
+    name: string,
+    args: Record<string, unknown>,
+    callId: string
+  ): Promise<{ success: boolean; output: string; label?: any }> {
+    const tool = this.deps.toolRegistry.get(name)
+    if (!tool) {
+      return {
+        success: false,
+        output: `Unknown tool: ${name}`,
+      }
+    }
+
+    // Create tool context
+    const context: ToolContext = {
+      sessionId: this.session.id,
+      requestId: callId,
+      approvals: this.session.approvals,
+      audit: this.deps.auditLogger,
+      sandbox: this.deps.sandboxExecutor,
+      workDir: this.config.workDir,
+    }
+
+    // Check if approval is needed
+    if (tool.capability.approval.level !== 'auto') {
+      const approvalId = computeApprovalId(name, 'execute', JSON.stringify(args))
+
+      if (!this.session.approvals.includes(approvalId)) {
+        const approved = await this.requestApproval({
+          id: approvalId,
+          tool: name,
+          action: 'execute',
+          target: this.formatToolTarget(args),
+          reason: `Tool ${name} requires approval`,
+          isDangerous: this.isDangerousTool(tool, args),
+        })
+
+        if (!approved) {
+          return {
+            success: false,
+            output: 'Tool execution denied by user',
+          }
+        }
+
+        this.session.approvals.push(approvalId)
+      }
+    }
+
+    // Execute the tool
+    const result = await tool.execute(args, context)
+
+    return {
+      success: result.success,
+      output: result.output,
+    }
+  }
+
+  /**
+   * Request approval from user.
+   */
+  private async requestApproval(request: ApprovalRequest): Promise<boolean> {
+    this.setState('waiting_approval')
+
+    // Send approval request to channel
+    await this.deps.channel.send({
+      type: 'approval_request',
+      id: randomUUID(),
+      timestamp: new Date(),
+      sessionId: this.session.id,
+      tool: request.tool,
+      action: request.action,
+      target: request.target,
+      reason: request.reason,
+      isDangerous: request.isDangerous ?? false,
+      approvalId: request.id,
+    })
+
+    // Wait for response
+    return new Promise((resolve) => {
+      this.pendingApproval = { request, resolve }
+    })
+  }
+
+  /**
+   * Handle approval response.
+   */
+  private handleApprovalResponse(message: ApprovalResponseMessage): void {
+    if (this.pendingApproval) {
+      if (message.rememberSession || message.rememberAlways) {
+        // Remember approval for session
+        this.session.approvals.push(this.pendingApproval.request.id)
+      }
+      this.pendingApproval.resolve(message.approved)
+      this.pendingApproval = null
+    }
+  }
+
+  /**
+   * Build tool definitions for provider.
+   */
+  private buildToolDefinitions(): any[] {
+    return this.deps.toolRegistry.all().map((tool) => ({
+      name: tool.name,
+      description: tool.description,
+      input_schema: this.zodToJsonSchema(tool.parameters),
+    }))
+  }
+
+  /**
+   * Convert Zod schema to JSON Schema (simplified).
+   */
+  private zodToJsonSchema(schema: any): any {
+    // This is a simplified conversion - in production we'd use a proper converter
+    try {
+      // Try to get the shape from Zod
+      if (schema._def?.typeName === 'ZodObject') {
+        const shape = schema._def.shape()
+        const properties: Record<string, any> = {}
+        const required: string[] = []
+
+        for (const [key, value] of Object.entries(shape)) {
+          const def = (value as any)._def
+          let type = 'string'
+
+          if (def?.typeName === 'ZodString') type = 'string'
+          else if (def?.typeName === 'ZodNumber') type = 'number'
+          else if (def?.typeName === 'ZodBoolean') type = 'boolean'
+          else if (def?.typeName === 'ZodArray') type = 'array'
+
+          properties[key] = {
+            type,
+            description: def?.description,
+          }
+
+          // Check if required (not optional/default)
+          if (!def?.typeName?.includes('Optional') && !def?.defaultValue) {
+            required.push(key)
+          }
+        }
+
+        return {
+          type: 'object',
+          properties,
+          required: required.length > 0 ? required : undefined,
+        }
+      }
+    } catch {
+      // Fall back to generic schema
+    }
+
+    return {
+      type: 'object',
+      properties: {},
+    }
+  }
+
+  /**
+   * Format tool target for display.
+   */
+  private formatToolTarget(args: Record<string, unknown>): string {
+    const target = args.command ?? args.path ?? args.url ?? ''
+    return String(target).slice(0, 100)
+  }
+
+  /**
+   * Check if tool call is dangerous.
+   */
+  private isDangerousTool(tool: ToolPlugin, args: Record<string, unknown>): boolean {
+    const patterns = tool.capability.approval.dangerPatterns
+    if (!patterns?.length) return false
+
+    const target = String(args.command ?? args.path ?? args.url ?? '')
+    return patterns.some((p) => p.test(target))
+  }
+
+  /**
+   * Create a new session.
+   */
+  private createSession(): Session {
+    return {
+      id: randomUUID(),
+      startTime: new Date(),
+      turns: [],
+      messages: [],
+      approvals: [],
+      totalUsage: { inputTokens: 0, outputTokens: 0 },
+      estimatedCost: 0,
+    }
+  }
+
+  /**
+   * Create a new turn.
+   */
+  private createTurn(userMessage: string): Turn {
+    return {
+      id: randomUUID(),
+      number: this.session.turns.length + 1,
+      userMessage,
+      toolCalls: [],
+      usage: { inputTokens: 0, outputTokens: 0 },
+      startTime: new Date(),
+    }
+  }
+
+  /**
+   * Update cost estimate.
+   */
+  private updateCost(): void {
+    const inputCost =
+      (this.session.totalUsage.inputTokens / 1_000_000) * this.config.inputTokenCost
+    const outputCost =
+      (this.session.totalUsage.outputTokens / 1_000_000) * this.config.outputTokenCost
+    this.session.estimatedCost = inputCost + outputCost
+  }
+
+  /**
+   * Set state and emit event.
+   */
+  private setState(state: OrchestratorState): void {
+    if (this.state !== state) {
+      this.state = state
+      this.emit('stateChange' as any, state)
+    }
+  }
+
+  /**
+   * Send assistant message to channel.
+   */
+  private async sendAssistantMessage(content: string): Promise<void> {
+    await this.deps.channel.send({
+      type: 'assistant_message',
+      id: randomUUID(),
+      timestamp: new Date(),
+      sessionId: this.session.id,
+      content,
+    })
+  }
+
+  /**
+   * Send error to channel.
+   */
+  private async sendError(code: string, message: string): Promise<void> {
+    await this.deps.channel.send({
+      type: 'error',
+      id: randomUUID(),
+      timestamp: new Date(),
+      sessionId: this.session.id,
+      code,
+      message,
+      recoverable: true,
+    })
+  }
+
+  /**
+   * Setup channel message listeners.
+   */
+  private setupChannelListeners(): void {
+    this.deps.channel.on('message', async (message: ChannelMessage) => {
+      switch (message.type) {
+        case 'user_message':
+          if (this.state === 'idle') {
+            await this.processMessage((message as UserMessage).content)
+          }
+          break
+
+        case 'approval_response':
+          this.handleApprovalResponse(message as ApprovalResponseMessage)
+          break
+      }
+    })
+  }
+}
