@@ -78,7 +78,7 @@ function createApprovalTool(name: string, level: 'ask' | 'always'): ToolPlugin {
     description: `Tool requiring ${level} approval`,
     parameters: z.object({ action: z.string().optional() }),
     capability: { name, approval: { level } },
-    actions: [{ tool: name, action: 'execute', affectsOthers: false, isDestructive: level === 'always' }],
+    actions: [{ tool: name, action: 'execute', affectsOthers: false, isDestructive: level === 'always', hasFinancialImpact: false }],
     async execute(args: unknown) {
       return { success: true, output: `${name} executed with ${JSON.stringify(args)}` }
     },
@@ -216,7 +216,7 @@ describe('CLI Interaction E2E Tests', () => {
         description: 'Dangerous tool',
         parameters: z.object({}),
         capability: { name: 'dangerous', approval: { level: 'ask' } },
-        actions: [{ tool: 'dangerous', action: 'execute', affectsOthers: true, isDestructive: true }],
+        actions: [{ tool: 'dangerous', action: 'execute', affectsOthers: true, isDestructive: true, hasFinancialImpact: false }],
         async execute() {
           toolExecuted = true
           return { success: true, output: 'executed' }
@@ -289,7 +289,7 @@ describe('CLI Interaction E2E Tests', () => {
         description: 'Write file',
         parameters: z.object({ path: z.string() }),
         capability: { name: 'write', approval: { level: 'ask' } },
-        actions: [{ tool: 'write_file', action: 'write', affectsOthers: false, isDestructive: true }],
+        actions: [{ tool: 'write_file', action: 'write', affectsOthers: false, isDestructive: true, hasFinancialImpact: false }],
         async execute(args: unknown) {
           toolExecuted = true
           return { success: true, output: 'File written' }
@@ -348,7 +348,7 @@ describe('CLI Interaction E2E Tests', () => {
         description: 'Tool called multiple times',
         parameters: z.object({ n: z.number() }),
         capability: { name: 'repeated', approval: { level: 'ask' } },
-        actions: [{ tool: 'repeated_tool', action: 'run', affectsOthers: false, isDestructive: false }],
+        actions: [{ tool: 'repeated_tool', action: 'run', affectsOthers: false, isDestructive: false, hasFinancialImpact: false }],
         async execute(args: unknown) {
           return { success: true, output: `run ${(args as any).n}` }
         },

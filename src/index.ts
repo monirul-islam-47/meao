@@ -1,19 +1,20 @@
-export function main(): void {
-  // Stub main. Later this will bootstrap Config -> Audit -> Tools -> Channel -> Orchestrator.
-  const args = process.argv.slice(2)
-  if (args.includes('--help') || args.includes('-h')) {
-    console.log(`meao
+import { main as cliMain } from './cli/index.js'
 
-Usage:
-  meao --version
-  meao --help
-`)
-    return
-  }
+export { main } from './cli/index.js'
 
-  // For now, no-op.
-}
+// Re-export core modules for programmatic use
+export * from './orchestrator/index.js'
+export * from './provider/index.js'
+export * from './tools/index.js'
+export * from './sandbox/index.js'
+export * from './channel/cli.js'
+export * from './audit/index.js'
+export * from './security/index.js'
 
+// Run CLI if executed directly
 if (import.meta.url === `file://${process.argv[1]}`) {
-  main()
+  cliMain().catch((error) => {
+    console.error('Fatal error:', error)
+    process.exit(1)
+  })
 }
