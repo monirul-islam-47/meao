@@ -1,5 +1,11 @@
 import { z } from 'zod'
 import type { ToolPlugin, ToolOutput, ToolContext } from '../types.js'
+import { networkGuard } from '../../security/network/index.js'
+
+/**
+ * Maximum number of redirects to follow.
+ */
+const MAX_REDIRECTS = 10
 
 /**
  * Web fetch tool - fetches content from URLs.
@@ -94,44 +100,86 @@ export const webFetchTool: ToolPlugin = {
       const controller = new AbortController()
       const timeoutId = setTimeout(() => controller.abort(), timeout)
 
-      const response = await fetch(url, {
-        method,
-        headers: {
-          'User-Agent': 'meao/1.0',
-          ...headers,
-        },
-        body: method !== 'GET' && body ? body : undefined,
-        signal: controller.signal,
-      })
+      // Follow redirects manually with re-validation
+      let currentUrl = url
+      let redirectCount = 0
 
-      clearTimeout(timeoutId)
+      while (redirectCount <= MAX_REDIRECTS) {
+        const response = await fetch(currentUrl, {
+          method: redirectCount === 0 ? method : 'GET', // Use GET for redirect follows
+          headers: {
+            'User-Agent': 'meao/1.0',
+            ...headers,
+          },
+          body: redirectCount === 0 && method !== 'GET' && body ? body : undefined,
+          signal: controller.signal,
+          redirect: 'manual', // Handle redirects manually to re-validate each hop
+        })
 
-      // Get response text
-      const contentType = response.headers.get('content-type') ?? ''
-      let content: string
+        // Check for redirect (3xx status codes)
+        if (response.status >= 300 && response.status < 400) {
+          const location = response.headers.get('location')
+          if (!location) {
+            clearTimeout(timeoutId)
+            return {
+              success: false,
+              output: `Redirect response ${response.status} missing Location header`,
+            }
+          }
 
-      if (contentType.includes('application/json')) {
-        // JSON passthrough
-        content = await response.text()
-      } else if (contentType.includes('text/html')) {
-        // HTML - extract text content
-        const html = await response.text()
-        content = extractTextFromHtml(html)
-      } else {
-        // Plain text
-        content = await response.text()
-      }
+          // Resolve relative URLs
+          const redirectUrl = new URL(location, currentUrl).href
 
-      if (!response.ok) {
+          // Re-validate redirect target against network guard
+          const checkResult = await networkGuard.checkUrl(redirectUrl, 'GET')
+          if (!checkResult.allowed) {
+            clearTimeout(timeoutId)
+            return {
+              success: false,
+              output: `Redirect to ${redirectUrl} blocked: ${checkResult.reason}`,
+            }
+          }
+
+          currentUrl = redirectUrl
+          redirectCount++
+          continue
+        }
+
+        clearTimeout(timeoutId)
+
+        // Get response text
+        const contentType = response.headers.get('content-type') ?? ''
+        let content: string
+
+        if (contentType.includes('application/json')) {
+          // JSON passthrough
+          content = await response.text()
+        } else if (contentType.includes('text/html')) {
+          // HTML - extract text content
+          const html = await response.text()
+          content = extractTextFromHtml(html)
+        } else {
+          // Plain text
+          content = await response.text()
+        }
+
+        if (!response.ok) {
+          return {
+            success: false,
+            output: `HTTP ${response.status}: ${response.statusText}\n${content}`,
+          }
+        }
+
         return {
-          success: false,
-          output: `HTTP ${response.status}: ${response.statusText}\n${content}`,
+          success: true,
+          output: content,
         }
       }
 
+      // Too many redirects
       return {
-        success: true,
-        output: content,
+        success: false,
+        output: `Too many redirects (max ${MAX_REDIRECTS})`,
       }
     } catch (error) {
       if (error instanceof Error && error.name === 'AbortError') {

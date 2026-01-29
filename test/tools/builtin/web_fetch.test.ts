@@ -7,6 +7,16 @@ import { ProcessSandbox } from '../../../src/sandbox/process.js'
 const mockFetch = vi.fn()
 vi.stubGlobal('fetch', mockFetch)
 
+// Mock networkGuard
+vi.mock('../../../src/security/network/index.js', () => ({
+  networkGuard: {
+    checkUrl: vi.fn().mockResolvedValue({ allowed: true }),
+  },
+}))
+
+import { networkGuard } from '../../../src/security/network/index.js'
+const mockCheckUrl = vi.mocked(networkGuard.checkUrl)
+
 const createMockContext = (): ToolContext => ({
   sessionId: 'test-session',
   turnId: 'test-turn',
@@ -23,6 +33,8 @@ describe('webFetchTool', () => {
   beforeEach(() => {
     context = createMockContext()
     mockFetch.mockReset()
+    mockCheckUrl.mockReset()
+    mockCheckUrl.mockResolvedValue({ allowed: true })
   })
 
   afterEach(() => {
@@ -216,5 +228,127 @@ describe('webFetchTool', () => {
 
     expect(postAction).toBeDefined()
     expect(postAction?.affectsOthers).toBe(true)
+  })
+
+  describe('redirect handling', () => {
+    it('follows redirects with re-validation', async () => {
+      // First request returns redirect
+      mockFetch
+        .mockResolvedValueOnce({
+          status: 302,
+          headers: new Map([['location', 'https://example.com/final']]),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          headers: new Map([['content-type', 'text/plain']]),
+          text: vi.fn().mockResolvedValue('Final content'),
+        })
+
+      const result = await webFetchTool.execute(
+        { url: 'https://example.com/redirect' },
+        context
+      )
+
+      expect(result.success).toBe(true)
+      expect(result.output).toBe('Final content')
+      // Verify redirect was validated
+      expect(mockCheckUrl).toHaveBeenCalledWith('https://example.com/final', 'GET')
+    })
+
+    it('blocks redirects to disallowed hosts', async () => {
+      // First request returns redirect to disallowed host
+      mockFetch.mockResolvedValueOnce({
+        status: 302,
+        headers: new Map([['location', 'https://evil.com/malware']]),
+      })
+
+      // Network guard blocks the redirect
+      mockCheckUrl.mockResolvedValueOnce({
+        allowed: false,
+        reason: 'Host not in allowlist: evil.com',
+      })
+
+      const result = await webFetchTool.execute(
+        { url: 'https://example.com/redirect' },
+        context
+      )
+
+      expect(result.success).toBe(false)
+      expect(result.output).toContain('blocked')
+      expect(result.output).toContain('evil.com')
+    })
+
+    it('handles relative redirect URLs', async () => {
+      mockFetch
+        .mockResolvedValueOnce({
+          status: 302,
+          headers: new Map([['location', '/new-path']]),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          headers: new Map([['content-type', 'text/plain']]),
+          text: vi.fn().mockResolvedValue('Content'),
+        })
+
+      const result = await webFetchTool.execute(
+        { url: 'https://example.com/old-path' },
+        context
+      )
+
+      expect(result.success).toBe(true)
+      // Should have validated the resolved absolute URL
+      expect(mockCheckUrl).toHaveBeenCalledWith('https://example.com/new-path', 'GET')
+    })
+
+    it('limits number of redirects', async () => {
+      // Return redirect for every request (infinite loop)
+      mockFetch.mockResolvedValue({
+        status: 302,
+        headers: new Map([['location', 'https://example.com/loop']]),
+      })
+
+      const result = await webFetchTool.execute(
+        { url: 'https://example.com/start' },
+        context
+      )
+
+      expect(result.success).toBe(false)
+      expect(result.output).toContain('Too many redirects')
+    })
+
+    it('handles redirect without Location header', async () => {
+      mockFetch.mockResolvedValueOnce({
+        status: 302,
+        headers: new Map(),
+      })
+
+      const result = await webFetchTool.execute(
+        { url: 'https://example.com/bad-redirect' },
+        context
+      )
+
+      expect(result.success).toBe(false)
+      expect(result.output).toContain('missing Location')
+    })
+
+    it('uses manual redirect mode', async () => {
+      mockFetch.mockResolvedValue({
+        ok: true,
+        headers: new Map([['content-type', 'text/plain']]),
+        text: vi.fn().mockResolvedValue('OK'),
+      })
+
+      await webFetchTool.execute(
+        { url: 'https://example.com/page' },
+        context
+      )
+
+      expect(mockFetch).toHaveBeenCalledWith(
+        'https://example.com/page',
+        expect.objectContaining({
+          redirect: 'manual',
+        })
+      )
+    })
   })
 })
