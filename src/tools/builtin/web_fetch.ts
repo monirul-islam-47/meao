@@ -65,10 +65,7 @@ export const webFetchTool: ToolPlugin = {
       outputDataClass: 'internal',
       acceptsUntrusted: false,
     },
-    audit: {
-      logArgs: true, // Log URL
-      logOutput: false, // NEVER log page content
-    },
+    // Note: Args/output never logged per AUDIT.md security policy
   },
   actions: [
     {

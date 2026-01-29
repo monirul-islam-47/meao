@@ -39,10 +39,7 @@ export const bashTool: ToolPlugin = {
       outputDataClass: 'internal',
       acceptsUntrusted: true,
     },
-    audit: {
-      logArgs: true, // Log command
-      logOutput: false, // Don't log output
-    },
+    // Note: Args/output never logged per AUDIT.md security policy
   },
   actions: [
     {

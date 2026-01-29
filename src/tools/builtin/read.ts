@@ -80,10 +80,7 @@ export const readTool: ToolPlugin = {
       outputDataClass: 'internal',
       acceptsUntrusted: true,
     },
-    audit: {
-      logArgs: true,
-      logOutput: false, // File contents not logged
-    },
+    // Note: Args/output never logged per AUDIT.md security policy
   },
   actions: [
     {

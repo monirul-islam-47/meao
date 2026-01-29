@@ -88,10 +88,7 @@ export const writeTool: ToolPlugin = {
       outputDataClass: 'internal',
       acceptsUntrusted: false, // Don't write untrusted content without approval
     },
-    audit: {
-      logArgs: true, // Log file path
-      logOutput: false, // File contents not logged
-    },
+    // Note: Args/output never logged per AUDIT.md security policy
   },
   actions: [
     {

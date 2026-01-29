@@ -46,10 +46,9 @@ export interface ToolCapability {
     outputDataClass: 'public' | 'internal' | 'sensitive' | 'secret'
     acceptsUntrusted?: boolean
   }
-  audit?: {
-    logArgs: boolean
-    logOutput: boolean
-  }
+  // Note: Tool args and output are NEVER logged to audit trail per AUDIT.md
+  // security policy. This prevents accidental leakage of sensitive data.
+  // The audit system only logs metadata (tool name, success, execution time).
 }
 
 /**
