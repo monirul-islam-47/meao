@@ -4,5 +4,6 @@ export type {
   NetworkConfig,
   AllowlistRule,
   DnsValidationResult,
+  ToolNetworkPolicy,
 } from './types.js'
 export { DEFAULT_NETWORK_CONFIG } from './types.js'

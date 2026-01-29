@@ -37,6 +37,18 @@ export interface NetworkConfig {
 }
 
 /**
+ * Tool-specific network policy (from ToolCapability.network).
+ */
+export interface ToolNetworkPolicy {
+  mode: 'allowlist' | 'blocklist'
+  allowedHosts?: string[]
+  blockedHosts?: string[]
+  blockedPorts?: number[]
+  blockPrivateIPs?: boolean
+  blockMetadataEndpoints?: boolean
+}
+
+/**
  * Default network configuration.
  */
 export const DEFAULT_NETWORK_CONFIG: NetworkConfig = {

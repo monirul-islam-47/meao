@@ -226,6 +226,8 @@ export class ToolExecutor {
 
   /**
    * Enforce network rules for a tool.
+   *
+   * Checks both global network policy AND tool-specific policy.
    */
   private async enforceNetwork(
     tool: ToolPlugin,
@@ -236,7 +238,8 @@ export class ToolExecutor {
     const url = String(args.url)
     const method = String(args.method ?? 'GET')
 
-    return networkGuard.checkUrl(url, method)
+    // Pass tool's network policy for enforcement
+    return networkGuard.checkUrl(url, method, tool.capability.network)
   }
 
   /**

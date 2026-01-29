@@ -1,7 +1,17 @@
-import type { NetworkCheckResult, NetworkConfig } from './types.js'
+import type { NetworkCheckResult, NetworkConfig, ToolNetworkPolicy } from './types.js'
 import { DEFAULT_NETWORK_CONFIG } from './types.js'
 import { DnsResolver } from './dns.js'
 import { findAllowlistRule, isMethodAllowed } from './allowlist.js'
+
+/**
+ * Cloud metadata endpoint patterns (SSRF targets).
+ */
+const METADATA_ENDPOINTS = [
+  '169.254.169.254', // AWS, GCP, Azure
+  '100.100.100.200', // Alibaba Cloud
+  'metadata.google.internal',
+  'metadata.internal',
+]
 
 /**
  * NetworkGuard - SINGLE CHOKE POINT for all network egress.
@@ -24,8 +34,16 @@ class NetworkGuard {
   /**
    * Check if a URL is allowed for network egress.
    * Called by: web_fetch tool, any future network tools.
+   *
+   * @param url - URL to check
+   * @param method - HTTP method
+   * @param toolPolicy - Optional tool-specific network policy to enforce
    */
-  async checkUrl(url: string, method: string = 'GET'): Promise<NetworkCheckResult> {
+  async checkUrl(
+    url: string,
+    method: string = 'GET',
+    toolPolicy?: ToolNetworkPolicy
+  ): Promise<NetworkCheckResult> {
     let parsed: URL
     try {
       parsed = new URL(url)
@@ -34,8 +52,9 @@ class NetworkGuard {
     }
 
     const hostname = parsed.hostname
+    const port = parsed.port ? parseInt(parsed.port, 10) : (parsed.protocol === 'https:' ? 443 : 80)
 
-    // 1. Check allowlist (host + method)
+    // 1. Check global allowlist (host + method)
     const rule = findAllowlistRule(hostname, this.config.allowlist)
     if (!rule) {
       return {
@@ -51,20 +70,94 @@ class NetworkGuard {
       }
     }
 
-    // 2. DNS validation (prevent rebinding attacks)
+    // 2. Enforce tool-specific policy (intersection with global)
+    if (toolPolicy) {
+      const toolCheck = this.checkToolPolicy(hostname, port, toolPolicy)
+      if (!toolCheck.allowed) {
+        return toolCheck
+      }
+    }
+
+    // 3. Check blocked ports (tool policy)
+    if (toolPolicy?.blockedPorts?.includes(port)) {
+      return { allowed: false, reason: `Port ${port} is blocked by tool policy` }
+    }
+
+    // 4. Block metadata endpoints (tool policy or global)
+    const blockMetadata = toolPolicy?.blockMetadataEndpoints ?? false
+    if (blockMetadata && this.isMetadataEndpoint(hostname)) {
+      return { allowed: false, reason: 'Cloud metadata endpoint blocked' }
+    }
+
+    // 5. DNS validation (prevent rebinding attacks)
     const dnsResult = await this.dnsResolver.resolve(hostname)
     if (!dnsResult.safe) {
       return { allowed: false, reason: dnsResult.reason }
     }
 
-    // 3. Block private IPs if configured
-    if (this.config.blockPrivateIps && dnsResult.ip) {
+    // 6. Block private IPs (global config or tool policy)
+    const blockPrivate = toolPolicy?.blockPrivateIPs ?? this.config.blockPrivateIps
+    if (blockPrivate && dnsResult.ip) {
       if (this.isPrivateIp(dnsResult.ip)) {
         return { allowed: false, reason: 'Private IP not allowed' }
       }
     }
 
+    // 7. Check resolved IP against metadata endpoints
+    if (blockMetadata && dnsResult.ip && METADATA_ENDPOINTS.includes(dnsResult.ip)) {
+      return { allowed: false, reason: 'Resolved IP is a metadata endpoint' }
+    }
+
     return { allowed: true, resolvedIp: dnsResult.ip }
+  }
+
+  /**
+   * Check tool-specific network policy.
+   */
+  private checkToolPolicy(
+    hostname: string,
+    port: number,
+    policy: ToolNetworkPolicy
+  ): NetworkCheckResult {
+    if (policy.mode === 'allowlist') {
+      // In allowlist mode, host must be in allowedHosts
+      if (policy.allowedHosts && policy.allowedHosts.length > 0) {
+        const allowed = policy.allowedHosts.some((pattern) => this.matchHost(hostname, pattern))
+        if (!allowed) {
+          return { allowed: false, reason: `Host ${hostname} not in tool allowlist` }
+        }
+      }
+    } else if (policy.mode === 'blocklist') {
+      // In blocklist mode, host must NOT be in blockedHosts
+      if (policy.blockedHosts && policy.blockedHosts.length > 0) {
+        const blocked = policy.blockedHosts.some((pattern) => this.matchHost(hostname, pattern))
+        if (blocked) {
+          return { allowed: false, reason: `Host ${hostname} is blocked by tool policy` }
+        }
+      }
+    }
+
+    return { allowed: true }
+  }
+
+  /**
+   * Check if a hostname matches a pattern (supports wildcards).
+   */
+  private matchHost(hostname: string, pattern: string): boolean {
+    if (pattern.startsWith('*.')) {
+      const suffix = pattern.slice(1) // e.g., '.github.com'
+      return hostname.endsWith(suffix) || hostname === pattern.slice(2)
+    }
+    return hostname === pattern
+  }
+
+  /**
+   * Check if a hostname is a cloud metadata endpoint.
+   */
+  private isMetadataEndpoint(hostname: string): boolean {
+    return METADATA_ENDPOINTS.some((endpoint) =>
+      hostname === endpoint || hostname.endsWith(`.${endpoint}`)
+    )
   }
 
   /**
