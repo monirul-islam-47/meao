@@ -24,6 +24,7 @@ import type {
 } from '../provider/types.js'
 import type { ToolPlugin, ToolContext, ApprovalRequest } from '../tools/types.js'
 import { computeApprovalId } from '../tools/types.js'
+import { secretDetector } from '../security/secrets/index.js'
 
 /**
  * Main orchestrator for coordinating conversations.
@@ -489,9 +490,21 @@ export class Orchestrator extends TypedEventEmitter {
     // Execute the tool
     const result = await tool.execute(args, context)
 
+    // Redact any secrets from the output before returning
+    const { redacted: sanitizedOutput, findings } = secretDetector.redact(result.output)
+
+    // Log if secrets were detected and redacted
+    if (findings.length > 0) {
+      await this.deps.auditLogger.warn('security', 'secrets_redacted', {
+        tool: name,
+        secretTypes: findings.map((f) => f.type),
+        count: findings.length,
+      })
+    }
+
     return {
       success: result.success,
-      output: result.output,
+      output: sanitizedOutput,
     }
   }
 
