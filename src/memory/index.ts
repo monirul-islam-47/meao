@@ -47,8 +47,21 @@ export {
   type AddEpisodicInput,
 } from './episodic/index.js'
 
-// Semantic Memory (to be added in M10.4)
-// export { SemanticMemory } from './semantic/index.js'
+// Semantic Memory
+export {
+  SemanticMemory,
+  SqliteSemanticStore,
+  type AddFactInput,
+  type ISemanticStore,
+  type SemanticQueryFilter,
+} from './semantic/index.js'
+export {
+  extractFacts,
+  validateFact,
+  type ExtractedFact,
+  type ExtractionConfig,
+  DEFAULT_EXTRACTION_CONFIG,
+} from './semantic/extraction.js'
 
 // Memory Manager (to be added in M10.5)
 // export { MemoryManager } from './manager.js'
