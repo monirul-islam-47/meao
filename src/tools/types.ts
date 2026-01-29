@@ -134,12 +134,23 @@ export function matchesActionPattern(action: string, pattern: string): boolean {
 
 /**
  * Compute canonical approval ID.
+ *
+ * For URL-based targets, includes host, path, and query string (but not fragment)
+ * to prevent over-broad approvals. For example, approving DELETE to /api/users?id=1
+ * should NOT approve DELETE to /api/users?id=2.
+ *
+ * For command-based targets, normalizes but preserves the full command.
  */
 export function computeApprovalId(
   tool: string,
   action: string,
   target: string
 ): string {
+  // Reject empty targets - each approval must have a specific target
+  if (!target || target.trim() === '') {
+    throw new Error('Approval target cannot be empty')
+  }
+
   // Normalize target
   const normalized = normalizeTarget(target)
   return `${tool}:${action}:${normalized}`
@@ -147,17 +158,39 @@ export function computeApprovalId(
 
 /**
  * Normalize target for approval ID.
+ *
+ * For URLs: includes host, path, and query string (important for API endpoints).
+ * Query parameters are sorted for consistent IDs regardless of order.
+ * Fragments are excluded as they don't affect server-side behavior.
+ *
+ * For non-URLs (commands, paths): lowercase and trim, but preserve
+ * enough detail to differentiate commands.
  */
 function normalizeTarget(target: string): string {
   // Try to parse as URL
   try {
     const url = new URL(target)
-    // Lowercase host, keep path, remove trailing slash
+    // Lowercase host
+    const host = url.host.toLowerCase()
+    // Keep path, remove trailing slash
     const path = url.pathname.replace(/\/$/, '') || '/'
-    return `${url.host.toLowerCase()}${path}`
+
+    // Include query string if present (important for API endpoints)
+    // Sort query params for consistent IDs regardless of order
+    let query = ''
+    if (url.search) {
+      const params = new URLSearchParams(url.search)
+      // Sort parameters alphabetically
+      params.sort()
+      query = '?' + params.toString()
+    }
+
+    return `${host}${path}${query}`
   } catch {
-    // Not a URL, just lowercase and trim
-    return target.toLowerCase().trim().slice(0, 100)
+    // Not a URL (command, path, etc.)
+    // Lowercase and trim, but keep more detail for commands
+    // Limit to 200 chars to prevent extremely long IDs
+    return target.toLowerCase().trim().slice(0, 200)
   }
 }
 

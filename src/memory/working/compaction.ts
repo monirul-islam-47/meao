@@ -34,11 +34,11 @@ export interface CompactionOptions {
  */
 export async function compactMessages(
   messages: WorkingMessage[],
-  options: CompactionOptions
+  _options: CompactionOptions
 ): Promise<WorkingMessage[]> {
   // For now, just return messages as-is
   // Truncation is handled in WorkingMemory.enforceTokenLimit()
-  // Summarization will be added in Phase 3+
+  // Summarization will be added in Phase 3+ (using _options)
   return messages
 }
 

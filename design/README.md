@@ -178,9 +178,9 @@ Three pillars:
 
 ### Implementation (Phase 2)
 26. [x] M9: Gateway (HTTP + WebSocket + Auth/Pairing)
-27. [ ] M10: Memory system
+27. [x] M10: Memory system (working + episodic + semantic)
 28. [ ] M11: Telegram channel
 
 ---
 
-*Last updated: 2026-01-29* (updated milestone status through M9)
+*Last updated: 2026-01-29* (updated milestone status through M10)

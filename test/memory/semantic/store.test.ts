@@ -15,6 +15,7 @@ function createFact(overrides: Partial<SemanticFact> = {}): SemanticFact {
   return {
     id: `fact-${Date.now()}-${Math.random().toString(36).slice(2)}`,
     type: 'semantic',
+    userId: 'test-user-1',
     factType: 'preference',
     subject: 'user',
     predicate: 'prefers',

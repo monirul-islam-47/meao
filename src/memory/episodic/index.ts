@@ -10,11 +10,10 @@
 import { randomUUID } from 'crypto'
 import type { ContentLabel } from '../../security/labels/types.js'
 import { secretDetector } from '../../security/secrets/index.js'
+import { sanitizeForStorage } from '../../security/sanitize/index.js'
 import type {
   EpisodicEntry,
-  EpisodicMemoryConfig,
   EpisodicSearchResult,
-  DEFAULT_EPISODIC_CONFIG,
 } from '../types.js'
 import {
   createEmbeddingGenerator,
@@ -24,8 +23,11 @@ import { SqliteVectorStore, type IVectorStore } from './store.js'
 
 /**
  * Input for adding an episodic entry.
+ *
+ * userId is required for user data isolation (INV-5).
  */
 export interface AddEpisodicInput {
+  userId: string // Required for user data isolation
   content: string
   sessionId: string
   turnNumber: number
@@ -76,10 +78,19 @@ export class EpisodicMemory {
     const id = randomUUID()
     const now = new Date()
 
-    // Redact secrets from content before storing
+    // Sanitize content for storage (anti-prompt-injection)
     let content = input.content
     let metadata = { ...input.metadata }
 
+    // Step 1: Sanitize to remove instruction-like patterns
+    const sanitizeResult = sanitizeForStorage(content)
+    if (sanitizeResult.sanitized) {
+      content = sanitizeResult.content
+      metadata.sanitized = true
+      metadata.sanitizedPatterns = sanitizeResult.removedPatterns
+    }
+
+    // Step 2: Redact secrets from content
     const scanResult = secretDetector.scan(content)
     if (scanResult.hasSecrets) {
       const redactionResult = secretDetector.redact(content)
@@ -94,6 +105,7 @@ export class EpisodicMemory {
     const entry: EpisodicEntry = {
       id,
       type: 'episodic',
+      userId: input.userId,
       content,
       embedding,
       sessionId: input.sessionId,
@@ -117,12 +129,16 @@ export class EpisodicMemory {
   /**
    * Search for similar entries.
    *
+   * Enforces user data isolation (INV-5) by requiring userId.
+   *
+   * @param userId - User ID for data isolation
    * @param query - Text query to search for
    * @param limit - Maximum number of results
    * @param minSimilarity - Minimum similarity threshold (0-1)
    * @returns Similar entries with similarity scores
    */
   async search(
+    userId: string,
     query: string,
     limit: number = 5,
     minSimilarity: number = 0.5
@@ -130,18 +146,21 @@ export class EpisodicMemory {
     // Generate embedding for query
     const queryEmbedding = await this.embeddings.generate(query)
 
-    // Search vector store
-    return this.store.search(queryEmbedding, limit, minSimilarity)
+    // Search vector store with user scoping
+    return this.store.search(queryEmbedding, limit, minSimilarity, userId)
   }
 
   /**
    * Get entries by session ID.
    *
+   * Enforces user data isolation (INV-5) by requiring userId.
+   *
+   * @param userId - User ID for data isolation
    * @param sessionId - Session to query
    * @returns Entries from the session
    */
-  async getBySession(sessionId: string): Promise<EpisodicEntry[]> {
-    return this.store.query({ sessionId })
+  async getBySession(userId: string, sessionId: string): Promise<EpisodicEntry[]> {
+    return this.store.query({ userId, sessionId })
   }
 
   /**
@@ -174,11 +193,14 @@ export class EpisodicMemory {
   /**
    * Get entries since a given date.
    *
+   * Enforces user data isolation (INV-5) by requiring userId.
+   *
+   * @param userId - User ID for data isolation
    * @param since - Start date
    * @returns Entries created after the date
    */
-  async getSince(since: Date): Promise<EpisodicEntry[]> {
-    return this.store.query({ since })
+  async getSince(userId: string, since: Date): Promise<EpisodicEntry[]> {
+    return this.store.query({ userId, since })
   }
 
   /**
@@ -190,16 +212,23 @@ export class EpisodicMemory {
 
   /**
    * Enforce max entries limit by removing oldest entries.
+   *
+   * When entry count exceeds maxEntries, deletes the oldest
+   * entries to bring the count back to the limit.
    */
   private async enforceLimit(): Promise<void> {
     const count = await this.store.count()
     if (count <= this.maxEntries) return
 
-    // Get oldest entries to remove
-    // For now, we'll just skip enforcement since it requires
-    // additional query capability. In production, we'd add
-    // a method to get oldest entries and delete them.
-    // TODO: Implement proper limit enforcement
+    // Calculate how many entries need to be removed
+    const toRemove = count - this.maxEntries
+
+    // Get IDs of oldest entries
+    const oldestIds = await this.store.getOldestIds(toRemove)
+    if (oldestIds.length === 0) return
+
+    // Delete oldest entries
+    await this.store.deleteMany(oldestIds)
   }
 }
 

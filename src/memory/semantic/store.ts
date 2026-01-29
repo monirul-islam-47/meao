@@ -10,6 +10,8 @@ import type { SemanticFact, FactType } from '../types.js'
 
 /**
  * Semantic store interface.
+ *
+ * All query operations support userId for user data isolation (INV-5).
  */
 export interface ISemanticStore {
   insert(fact: SemanticFact): Promise<void>
@@ -17,14 +19,17 @@ export interface ISemanticStore {
   get(id: string): Promise<SemanticFact | null>
   delete(id: string): Promise<boolean>
   query(filter: SemanticQueryFilter): Promise<SemanticFact[]>
-  count(): Promise<number>
+  count(userId?: string): Promise<number>
   close(): void
 }
 
 /**
  * Filter options for querying semantic facts.
+ *
+ * userId should be provided for user data isolation (INV-5).
  */
 export interface SemanticQueryFilter {
+  userId?: string // For user data isolation
   subject?: string
   predicate?: string
   object?: string
@@ -52,6 +57,7 @@ export class SqliteSemanticStore implements ISemanticStore {
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS semantic_facts (
         id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
         fact_type TEXT NOT NULL,
         subject TEXT NOT NULL,
         predicate TEXT NOT NULL,
@@ -65,10 +71,12 @@ export class SqliteSemanticStore implements ISemanticStore {
         metadata TEXT NOT NULL
       );
 
+      CREATE INDEX IF NOT EXISTS idx_semantic_user ON semantic_facts(user_id);
       CREATE INDEX IF NOT EXISTS idx_semantic_subject ON semantic_facts(subject);
       CREATE INDEX IF NOT EXISTS idx_semantic_predicate ON semantic_facts(predicate);
       CREATE INDEX IF NOT EXISTS idx_semantic_type ON semantic_facts(fact_type);
       CREATE INDEX IF NOT EXISTS idx_semantic_confidence ON semantic_facts(confidence);
+      CREATE INDEX IF NOT EXISTS idx_semantic_user_subject ON semantic_facts(user_id, subject);
     `)
   }
 
@@ -78,12 +86,13 @@ export class SqliteSemanticStore implements ISemanticStore {
   async insert(fact: SemanticFact): Promise<void> {
     const stmt = this.db.prepare(`
       INSERT OR REPLACE INTO semantic_facts
-      (id, fact_type, subject, predicate, object, content, confidence, label, source, created_at, updated_at, metadata)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      (id, user_id, fact_type, subject, predicate, object, content, confidence, label, source, created_at, updated_at, metadata)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `)
 
     stmt.run(
       fact.id,
+      fact.userId,
       fact.factType,
       fact.subject,
       fact.predicate,
@@ -142,10 +151,17 @@ export class SqliteSemanticStore implements ISemanticStore {
 
   /**
    * Query facts by filter.
+   *
+   * When userId is provided, only returns that user's facts (INV-5).
    */
   async query(filter: SemanticQueryFilter): Promise<SemanticFact[]> {
     let sql = 'SELECT * FROM semantic_facts WHERE 1=1'
     const params: any[] = []
+
+    if (filter.userId) {
+      sql += ' AND user_id = ?'
+      params.push(filter.userId)
+    }
 
     if (filter.subject) {
       sql += ' AND subject = ?'
@@ -189,12 +205,20 @@ export class SqliteSemanticStore implements ISemanticStore {
   }
 
   /**
-   * Count total facts.
+   * Count facts.
+   *
+   * When userId is provided, counts only that user's facts (INV-5).
    */
-  async count(): Promise<number> {
-    const row = this.db
-      .prepare('SELECT COUNT(*) as count FROM semantic_facts')
-      .get() as { count: number }
+  async count(userId?: string): Promise<number> {
+    let sql = 'SELECT COUNT(*) as count FROM semantic_facts'
+    const params: string[] = []
+
+    if (userId) {
+      sql += ' WHERE user_id = ?'
+      params.push(userId)
+    }
+
+    const row = this.db.prepare(sql).get(...params) as { count: number }
     return row.count
   }
 
@@ -213,6 +237,7 @@ export class SqliteSemanticStore implements ISemanticStore {
     return {
       id: row.id,
       type: 'semantic',
+      userId: row.user_id,
       factType: row.fact_type as FactType,
       subject: row.subject,
       predicate: row.predicate,

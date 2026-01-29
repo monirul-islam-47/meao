@@ -20,6 +20,7 @@ function createEntry(overrides: Partial<EpisodicEntry> = {}): EpisodicEntry {
   return {
     id: `entry-${entryCounter}-${Math.random().toString(36).slice(2)}`,
     type: 'episodic',
+    userId: 'test-user-1',
     content: 'Test content',
     embedding: new Array(TEST_DIMENSIONS).fill(0).map(() => Math.random() - 0.5),
     sessionId: 'session-1',
@@ -263,6 +264,74 @@ describe('SqliteVectorStore', () => {
       await store.delete('a')
 
       expect(await store.count()).toBe(1)
+    })
+  })
+
+  describe('getOldestIds', () => {
+    it('returns ids of oldest entries', async () => {
+      // Insert with explicit timestamps
+      await store.insert(
+        createEntry({ id: 'old', createdAt: new Date('2024-01-01') })
+      )
+      await store.insert(
+        createEntry({ id: 'mid', createdAt: new Date('2024-06-01') })
+      )
+      await store.insert(
+        createEntry({ id: 'new', createdAt: new Date('2024-12-01') })
+      )
+
+      const oldest = await store.getOldestIds(2)
+
+      expect(oldest).toHaveLength(2)
+      expect(oldest[0]).toBe('old')
+      expect(oldest[1]).toBe('mid')
+    })
+
+    it('returns empty array when no entries', async () => {
+      const oldest = await store.getOldestIds(5)
+      expect(oldest).toHaveLength(0)
+    })
+
+    it('returns all ids if limit exceeds count', async () => {
+      await store.insert(createEntry({ id: 'a' }))
+      await store.insert(createEntry({ id: 'b' }))
+
+      const oldest = await store.getOldestIds(10)
+      expect(oldest).toHaveLength(2)
+    })
+  })
+
+  describe('deleteMany', () => {
+    it('deletes multiple entries by ids', async () => {
+      await store.insert(createEntry({ id: 'a' }))
+      await store.insert(createEntry({ id: 'b' }))
+      await store.insert(createEntry({ id: 'c' }))
+      await store.insert(createEntry({ id: 'd' }))
+
+      const deleted = await store.deleteMany(['a', 'c'])
+
+      expect(deleted).toBe(2)
+      expect(await store.get('a')).toBeNull()
+      expect(await store.get('b')).not.toBeNull()
+      expect(await store.get('c')).toBeNull()
+      expect(await store.get('d')).not.toBeNull()
+    })
+
+    it('returns 0 for empty id array', async () => {
+      await store.insert(createEntry({ id: 'a' }))
+
+      const deleted = await store.deleteMany([])
+      expect(deleted).toBe(0)
+      expect(await store.count()).toBe(1)
+    })
+
+    it('returns count of actually deleted entries', async () => {
+      await store.insert(createEntry({ id: 'exists' }))
+
+      // Try to delete one existing and one non-existing
+      const deleted = await store.deleteMany(['exists', 'non-existent'])
+
+      expect(deleted).toBe(1)
     })
   })
 })

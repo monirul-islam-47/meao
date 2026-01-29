@@ -11,7 +11,7 @@
 
 import { randomUUID } from 'crypto'
 import type { ContentLabel, FlowDecision } from '../../security/labels/types.js'
-import { combineLabels, propagateLabel } from '../../security/labels/propagation.js'
+import { combineLabels } from '../../security/labels/propagation.js'
 import { canWriteWorkingMemory } from '../../security/flow/control.js'
 import { secretDetector } from '../../security/secrets/index.js'
 import type {

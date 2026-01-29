@@ -222,7 +222,7 @@ describe('CLI Interaction E2E Tests', () => {
       const approvalTool: ToolPlugin = {
         name: 'dangerous',
         description: 'Dangerous tool',
-        parameters: z.object({}),
+        parameters: z.object({ command: z.string() }),
         capability: { name: 'dangerous', approval: { level: 'ask' } },
         actions: [{ tool: 'dangerous', action: 'execute', affectsOthers: true, isDestructive: true, hasFinancialImpact: false }],
         async execute() {
@@ -260,7 +260,7 @@ describe('CLI Interaction E2E Tests', () => {
         callCount++
         if (callCount === 1) {
           return {
-            content: [{ type: 'tool_use', id: 'c1', name: 'dangerous', input: {} }],
+            content: [{ type: 'tool_use', id: 'c1', name: 'dangerous', input: { command: 'rm -rf /' } }],
             stopReason: 'tool_use',
           }
         }
@@ -354,7 +354,7 @@ describe('CLI Interaction E2E Tests', () => {
       const tool: ToolPlugin = {
         name: 'repeated_tool',
         description: 'Tool called multiple times',
-        parameters: z.object({ n: z.number() }),
+        parameters: z.object({ command: z.string(), n: z.number() }),
         capability: { name: 'repeated', approval: { level: 'ask' } },
         actions: [{ tool: 'repeated_tool', action: 'run', affectsOthers: false, isDestructive: false, hasFinancialImpact: false }],
         async execute(args: unknown) {
@@ -383,14 +383,14 @@ describe('CLI Interaction E2E Tests', () => {
         { streaming: false, workDir: testDir }
       )
 
-      // First call with approval
+      // First call with approval - same command for approval caching
       provider.addGenerator(() => ({
-        content: [{ type: 'tool_use', id: 'c1', name: 'repeated_tool', input: { n: 1 } }],
+        content: [{ type: 'tool_use', id: 'c1', name: 'repeated_tool', input: { command: 'echo test', n: 1 } }],
         stopReason: 'tool_use',
       }))
-      // Second call - same tool, same args - should use cached approval
+      // Second call - same tool, same command - should use cached approval
       provider.addGenerator(() => ({
-        content: [{ type: 'tool_use', id: 'c2', name: 'repeated_tool', input: { n: 1 } }],
+        content: [{ type: 'tool_use', id: 'c2', name: 'repeated_tool', input: { command: 'echo test', n: 1 } }],
         stopReason: 'tool_use',
       }))
       provider.addGenerator(() => ({

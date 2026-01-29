@@ -144,7 +144,7 @@ describe('MemoryManager', () => {
       memory.add('system', 'You are helpful', createLabel())
       memory.add('user', 'Hello', createLabel())
 
-      const context = await manager.buildContext('session-1', 'test query')
+      const context = await manager.buildContext('test-user-1', 'session-1', 'test query')
 
       expect(context.workingMessages).toHaveLength(2)
       expect(context.workingMessages[0].role).toBe('system')
@@ -154,13 +154,13 @@ describe('MemoryManager', () => {
       const memory = manager.getWorkingMemory('session-1')
       memory.add('user', 'Hello', createLabel({ trustLevel: 'verified' }))
 
-      const context = await manager.buildContext('session-1', 'test query')
+      const context = await manager.buildContext('test-user-1', 'session-1', 'test query')
 
       expect(context.workingLabel.trustLevel).toBe('verified')
     })
 
     it('returns empty arrays for new session', async () => {
-      const context = await manager.buildContext('new-session', 'test query')
+      const context = await manager.buildContext('test-user-1', 'new-session', 'test query')
 
       expect(context.workingMessages).toHaveLength(0)
       expect(context.relevantEpisodic).toHaveLength(0)
@@ -171,6 +171,7 @@ describe('MemoryManager', () => {
       // Add episodic entry
       const episodic = manager.getEpisodicMemory()!
       await episodic.add({
+        userId: 'test-user-1',
         content: 'user: I like TypeScript\nassistant: Great choice!',
         sessionId: 'old-session',
         turnNumber: 1,
@@ -179,17 +180,44 @@ describe('MemoryManager', () => {
       })
 
       // Build context - with mock embeddings, similarity may be low
-      const context = await manager.buildContext('new-session', 'TypeScript', {
+      const context = await manager.buildContext('test-user-1', 'new-session', 'TypeScript', {
         episodicMinSimilarity: -1, // Include all
       })
 
       expect(context.relevantEpisodic.length).toBeGreaterThan(0)
     })
 
+    it('strips embeddings from episodic context (prevents context flooding)', async () => {
+      // Add episodic entry
+      const episodic = manager.getEpisodicMemory()!
+      await episodic.add({
+        userId: 'test-user-1',
+        content: 'user: Test entry\nassistant: Response',
+        sessionId: 'old-session',
+        turnNumber: 1,
+        participants: ['user', 'assistant'],
+        label: createLabel(),
+      })
+
+      // Verify raw entry has embedding
+      const rawResults = await episodic.search('test-user-1', 'test', 10, -1)
+      expect(rawResults[0].embedding.length).toBeGreaterThan(0)
+
+      // Build context
+      const context = await manager.buildContext('test-user-1', 'new-session', 'test', {
+        episodicMinSimilarity: -1,
+      })
+
+      // Context entries should have embeddings stripped (empty array)
+      expect(context.relevantEpisodic.length).toBeGreaterThan(0)
+      expect(context.relevantEpisodic[0].embedding).toEqual([])
+    })
+
     it('includes relevant semantic facts', async () => {
       // Add semantic fact
       const semantic = manager.getSemanticMemory()!
       await semantic.add({
+        userId: 'test-user-1',
         factType: 'preference',
         subject: 'user',
         predicate: 'prefers',
@@ -199,7 +227,7 @@ describe('MemoryManager', () => {
       })
 
       // Build context with query containing relevant words
-      const context = await manager.buildContext('session-1', 'What does the user prefer?', {
+      const context = await manager.buildContext('test-user-1', 'session-1', 'What does the user prefer?', {
         semanticMinConfidence: 0.8,
       })
 
@@ -217,6 +245,7 @@ describe('MemoryManager', () => {
 
     it('saves turn to episodic memory', async () => {
       await manager.saveTurnToEpisodic(
+        'test-user-1',
         'session-1',
         1,
         [
@@ -227,7 +256,7 @@ describe('MemoryManager', () => {
       )
 
       const episodic = manager.getEpisodicMemory()!
-      const results = await episodic.getBySession('session-1')
+      const results = await episodic.getBySession('test-user-1', 'session-1')
 
       expect(results).toHaveLength(1)
       expect(results[0].turnNumber).toBe(1)
@@ -237,6 +266,7 @@ describe('MemoryManager', () => {
 
     it('combines messages into content', async () => {
       await manager.saveTurnToEpisodic(
+        'test-user-1',
         'session-1',
         1,
         [
@@ -247,10 +277,12 @@ describe('MemoryManager', () => {
       )
 
       const episodic = manager.getEpisodicMemory()!
-      const results = await episodic.getBySession('session-1')
+      const results = await episodic.getBySession('test-user-1', 'session-1')
 
-      expect(results[0].content).toContain('user: What is TypeScript?')
-      expect(results[0].content).toContain('assistant: TypeScript is a typed superset')
+      // Content is sanitized - role prefixes like "user:" are stripped as they match
+      // the INSTRUCTION_PATTERNS (role_prefix pattern for prompt injection prevention)
+      expect(results[0].content).toContain('What is TypeScript?')
+      expect(results[0].content).toContain('TypeScript is a typed superset')
     })
 
     it('does nothing if episodic memory disabled', async () => {
@@ -262,6 +294,7 @@ describe('MemoryManager', () => {
 
       // Should not throw
       await manager.saveTurnToEpisodic(
+        'test-user-1',
         'session-1',
         1,
         [{ role: 'user', content: 'Hello' }],

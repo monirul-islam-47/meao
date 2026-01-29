@@ -311,7 +311,7 @@ describe('Security Integration Tests', () => {
       const askTool: ToolPlugin = {
         name: 'ask_tool',
         description: 'Tool requiring approval',
-        parameters: z.object({}),
+        parameters: z.object({ command: z.string() }),
         capability: {
           name: 'ask_tool',
           approval: { level: 'ask' },
@@ -338,7 +338,7 @@ describe('Security Integration Tests', () => {
                 type: 'tool_use',
                 id: 'ask-1',
                 name: 'ask_tool',
-                input: {},
+                input: { command: 'test command' },
               },
             ],
             stopReason: 'tool_use',
@@ -384,7 +384,7 @@ describe('Security Integration Tests', () => {
       const askTool: ToolPlugin = {
         name: 'dangerous_tool',
         description: 'Tool requiring approval',
-        parameters: z.object({}),
+        parameters: z.object({ command: z.string() }),
         capability: {
           name: 'dangerous_tool',
           approval: { level: 'ask' },
@@ -407,7 +407,7 @@ describe('Security Integration Tests', () => {
                 type: 'tool_use',
                 id: 'danger-1',
                 name: 'dangerous_tool',
-                input: {},
+                input: { command: 'rm -rf /' },
               },
             ],
             stopReason: 'tool_use',
@@ -453,7 +453,7 @@ describe('Security Integration Tests', () => {
       const askTool: ToolPlugin = {
         name: 'ask_tool',
         description: 'Tool requiring approval',
-        parameters: z.object({}),
+        parameters: z.object({ command: z.string() }),
         capability: {
           name: 'ask_tool',
           approval: { level: 'ask' },
@@ -477,14 +477,14 @@ describe('Security Integration Tests', () => {
       provider.addGenerator(() => {
         callCount++
         if (callCount === 1 || callCount === 3) {
-          // Both turns try to use the tool
+          // Both turns try to use the tool with SAME command (for approval reuse)
           return {
             content: [
               {
                 type: 'tool_use',
                 id: `ask-${callCount}`,
                 name: 'ask_tool',
-                input: {},
+                input: { command: 'echo hello' },
               },
             ],
             stopReason: 'tool_use',

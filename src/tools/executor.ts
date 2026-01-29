@@ -114,6 +114,9 @@ export class ToolExecutor {
 
   /**
    * Compute required approvals for a tool call.
+   *
+   * Each approval is tied to a specific target (command, path, or URL).
+   * Empty targets are not allowed to prevent over-broad approvals.
    */
   private computeApprovals(
     tool: ToolPlugin,
@@ -122,13 +125,23 @@ export class ToolExecutor {
     const approvals: ApprovalRequest[] = []
     const capability = tool.capability
 
+    // Extract target from args - prioritize in order: command, path, url
+    const target = this.extractTarget(args)
+
     // Check if tool always requires approval
     if (capability.approval.level === 'always') {
+      // Require a valid target for approval ID
+      if (!target) {
+        throw new Error(
+          `Tool ${tool.name} requires approval but no target could be extracted from args`
+        )
+      }
+
       approvals.push({
-        id: computeApprovalId(tool.name, 'execute', String(args.command ?? '')),
+        id: computeApprovalId(tool.name, 'execute', target),
         tool: tool.name,
         action: 'execute',
-        target: String(args.command ?? args.path ?? args.url ?? ''),
+        target,
         reason: 'Tool requires approval for all operations',
         isDangerous: false,
       })
@@ -137,7 +150,13 @@ export class ToolExecutor {
 
     // Check if tool requires approval on ask
     if (capability.approval.level === 'ask') {
-      const target = String(args.command ?? args.path ?? args.url ?? '')
+      // Require a valid target for approval ID
+      if (!target) {
+        throw new Error(
+          `Tool ${tool.name} requires approval but no target could be extracted from args`
+        )
+      }
+
       const isDangerous = this.isDangerousCommand(capability, target)
 
       approvals.push({
@@ -158,14 +177,16 @@ export class ToolExecutor {
       const conditions = capability.approval.conditions
 
       // Check method-based approval
-      if (conditions.methodRequiresApproval && args.method) {
+      if (conditions.methodRequiresApproval && args.method && args.url) {
         const method = String(args.method).toUpperCase()
-        if (conditions.methodRequiresApproval.includes(method)) {
+        const urlStr = String(args.url).trim()
+
+        if (conditions.methodRequiresApproval.includes(method) && urlStr) {
           approvals.push({
-            id: computeApprovalId(tool.name, method, String(args.url ?? '')),
+            id: computeApprovalId(tool.name, method, urlStr),
             tool: tool.name,
             action: method,
-            target: String(args.url ?? ''),
+            target: urlStr,
             reason: `${method} method requires approval`,
             isDangerous: false,
           })
@@ -174,20 +195,23 @@ export class ToolExecutor {
 
       // Check unknown host approval
       if (conditions.unknownHostRequiresApproval && args.url) {
-        try {
-          const url = new URL(String(args.url))
-          if (!this.isKnownHost(url.hostname, capability.network?.allowedHosts)) {
-            approvals.push({
-              id: computeApprovalId(tool.name, 'access', url.hostname),
-              tool: tool.name,
-              action: 'access',
-              target: url.hostname,
-              reason: 'Unknown host requires approval',
-              isDangerous: false,
-            })
+        const urlStr = String(args.url).trim()
+        if (urlStr) {
+          try {
+            const url = new URL(urlStr)
+            if (!this.isKnownHost(url.hostname, capability.network?.allowedHosts)) {
+              approvals.push({
+                id: computeApprovalId(tool.name, 'access', url.hostname),
+                tool: tool.name,
+                action: 'access',
+                target: url.hostname,
+                reason: 'Unknown host requires approval',
+                isDangerous: false,
+              })
+            }
+          } catch {
+            // Invalid URL will be caught by validation
           }
-        } catch {
-          // Invalid URL will be caught by validation
         }
       }
     }
@@ -222,6 +246,26 @@ export class ToolExecutor {
       }
       return hostname === pattern
     })
+  }
+
+  /**
+   * Extract target from tool args.
+   *
+   * Priority: command > path > url
+   * Returns undefined if no valid target found.
+   */
+  private extractTarget(args: Record<string, unknown>): string | undefined {
+    // Check in priority order
+    for (const key of ['command', 'path', 'url']) {
+      const value = args[key]
+      if (value !== undefined && value !== null) {
+        const str = String(value).trim()
+        if (str.length > 0) {
+          return str
+        }
+      }
+    }
+    return undefined
   }
 
   /**

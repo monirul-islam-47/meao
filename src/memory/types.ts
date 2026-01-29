@@ -21,10 +21,14 @@ export type FactType = 'preference' | 'entity' | 'relationship' | 'instruction'
 
 /**
  * Base memory entry interface.
+ *
+ * All memory entries are scoped by userId to enforce INV-5:
+ * "User A cannot access User B's data"
  */
 export interface MemoryEntry {
   id: string
   type: MemoryType
+  userId: string // Required for user data isolation (INV-5)
   content: string
   label: ContentLabel
   createdAt: Date
@@ -75,8 +79,11 @@ export interface WorkingMessage {
 
 /**
  * Query parameters for memory retrieval.
+ *
+ * userId is required for all queries to enforce user data isolation (INV-5).
  */
 export interface MemoryQuery {
+  userId: string // Required for user data isolation
   query: string
   types?: MemoryType[]
   limit?: number
@@ -95,6 +102,27 @@ export interface MemoryWriteResult {
     reason: string
     canOverride: boolean
   }
+}
+
+/**
+ * Reason for trust level promotion.
+ */
+export type PromotionReason =
+  | 'user_confirmed_as_fact' // User explicitly vouched for content
+  | 'owner_override' // Owner used admin powers
+  | 'verified_source' // Source verified (e.g., signed)
+
+/**
+ * Records when content is promoted to a higher trust level.
+ * Required for audit trail per INV-9 and LABELS.md.
+ */
+export interface LabelPromotion {
+  scope: 'entry' // Promotion is per-entry, not global
+  originalTrustLevel: ContentLabel['trustLevel']
+  promotedTo: ContentLabel['trustLevel']
+  reason: PromotionReason
+  authorizedBy: string // userId
+  timestamp: Date
 }
 
 /**

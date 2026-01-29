@@ -28,6 +28,7 @@ const createTestTool = (
   description: `Test tool ${name}`,
   parameters: z.object({
     input: z.string().optional(),
+    command: z.string().optional(),
   }),
   capability: {
     name,
@@ -140,7 +141,8 @@ describe('ToolExecutor', () => {
 
       const tool = createTestTool('ask_tool', { success: true, output: 'approved' }, { approvalLevel: 'ask' })
 
-      const result = await askExecutor.execute(tool, {}, context)
+      // Must provide a valid target (command/path/url) for approval
+      const result = await askExecutor.execute(tool, { command: 'ls -la' }, context)
 
       expect(callback).toHaveBeenCalled()
       expect(result.success).toBe(true)
@@ -153,7 +155,8 @@ describe('ToolExecutor', () => {
 
       const tool = createTestTool('denied_tool', { success: true, output: 'should not run' }, { approvalLevel: 'ask' })
 
-      const result = await denyExecutor.execute(tool, {}, context)
+      // Must provide a valid target (command/path/url) for approval
+      const result = await denyExecutor.execute(tool, { command: 'rm -rf /' }, context)
 
       expect(result.success).toBe(false)
       expect(result.output).toMatch(/denied/i)
@@ -167,12 +170,12 @@ describe('ToolExecutor', () => {
 
       const tool = createTestTool('reuse_tool', { success: true, output: 'ok' }, { approvalLevel: 'ask' })
 
-      // First call - should ask
-      await askExecutor.execute(tool, { input: 'same' }, context)
+      // First call - should ask (must provide same command for approval reuse)
+      await askExecutor.execute(tool, { command: 'echo hello' }, context)
       const firstCallCount = callback.mock.calls.length
 
-      // Second call with same context - should reuse approval
-      await askExecutor.execute(tool, { input: 'same' }, context)
+      // Second call with same command - should reuse approval
+      await askExecutor.execute(tool, { command: 'echo hello' }, context)
 
       // Callback should only be called once (approval was cached)
       expect(callback.mock.calls.length).toBe(firstCallCount)

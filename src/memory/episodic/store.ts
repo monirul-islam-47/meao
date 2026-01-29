@@ -11,18 +11,23 @@ import { cosineSimilarity } from './embeddings.js'
 
 /**
  * Vector store interface.
+ *
+ * All operations that return data require userId for user isolation (INV-5).
  */
 export interface IVectorStore {
   insert(entry: EpisodicEntry): Promise<void>
   search(
     queryEmbedding: number[],
     limit: number,
-    minSimilarity?: number
+    minSimilarity?: number,
+    userId?: string
   ): Promise<EpisodicSearchResult[]>
-  query(filter: { sessionId?: string; since?: Date }): Promise<EpisodicEntry[]>
+  query(filter: { userId?: string; sessionId?: string; since?: Date }): Promise<EpisodicEntry[]>
   get(id: string): Promise<EpisodicEntry | null>
   delete(id: string): Promise<boolean>
-  count(): Promise<number>
+  deleteMany(ids: string[]): Promise<number>
+  count(userId?: string): Promise<number>
+  getOldestIds(limit: number): Promise<string[]>
   close(): void
 }
 
@@ -34,10 +39,11 @@ export interface IVectorStore {
  */
 export class SqliteVectorStore implements IVectorStore {
   private db: Database.Database
-  private dimensions: number
+  // Store dimensions for future use (e.g., validation)
+  private _dimensions: number
 
   constructor(path: string, dimensions: number = 1536) {
-    this.dimensions = dimensions
+    this._dimensions = dimensions
     this.db = new Database(path)
     this.initSchema()
   }
@@ -49,6 +55,7 @@ export class SqliteVectorStore implements IVectorStore {
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS episodic_entries (
         id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
         content TEXT NOT NULL,
         embedding TEXT NOT NULL,
         session_id TEXT NOT NULL,
@@ -60,8 +67,10 @@ export class SqliteVectorStore implements IVectorStore {
         metadata TEXT NOT NULL
       );
 
+      CREATE INDEX IF NOT EXISTS idx_episodic_user ON episodic_entries(user_id);
       CREATE INDEX IF NOT EXISTS idx_episodic_session ON episodic_entries(session_id);
       CREATE INDEX IF NOT EXISTS idx_episodic_created ON episodic_entries(created_at);
+      CREATE INDEX IF NOT EXISTS idx_episodic_user_session ON episodic_entries(user_id, session_id);
     `)
   }
 
@@ -71,12 +80,13 @@ export class SqliteVectorStore implements IVectorStore {
   async insert(entry: EpisodicEntry): Promise<void> {
     const stmt = this.db.prepare(`
       INSERT OR REPLACE INTO episodic_entries
-      (id, content, embedding, session_id, turn_number, participants, label, created_at, updated_at, metadata)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      (id, user_id, content, embedding, session_id, turn_number, participants, label, created_at, updated_at, metadata)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `)
 
     stmt.run(
       entry.id,
+      entry.userId,
       entry.content,
       JSON.stringify(entry.embedding),
       entry.sessionId,
@@ -91,16 +101,25 @@ export class SqliteVectorStore implements IVectorStore {
 
   /**
    * Search for similar entries using brute-force cosine similarity.
+   *
+   * When userId is provided, only searches that user's entries (INV-5).
    */
   async search(
     queryEmbedding: number[],
     limit: number,
-    minSimilarity: number = 0
+    minSimilarity: number = 0,
+    userId?: string
   ): Promise<EpisodicSearchResult[]> {
-    // Get all entries (brute force for MVP)
-    const rows = this.db
-      .prepare('SELECT * FROM episodic_entries')
-      .all() as any[]
+    // Get entries (filtered by userId if provided)
+    let sql = 'SELECT * FROM episodic_entries'
+    const params: string[] = []
+
+    if (userId) {
+      sql += ' WHERE user_id = ?'
+      params.push(userId)
+    }
+
+    const rows = this.db.prepare(sql).all(...params) as any[]
 
     // Calculate similarities
     const results: EpisodicSearchResult[] = []
@@ -124,10 +143,17 @@ export class SqliteVectorStore implements IVectorStore {
 
   /**
    * Query entries by filter.
+   *
+   * When userId is provided, only returns that user's entries (INV-5).
    */
-  async query(filter: { sessionId?: string; since?: Date }): Promise<EpisodicEntry[]> {
+  async query(filter: { userId?: string; sessionId?: string; since?: Date }): Promise<EpisodicEntry[]> {
     let sql = 'SELECT * FROM episodic_entries WHERE 1=1'
     const params: any[] = []
+
+    if (filter.userId) {
+      sql += ' AND user_id = ?'
+      params.push(filter.userId)
+    }
 
     if (filter.sessionId) {
       sql += ' AND session_id = ?'
@@ -168,12 +194,50 @@ export class SqliteVectorStore implements IVectorStore {
   }
 
   /**
-   * Count total entries.
+   * Delete multiple entries by IDs.
    */
-  async count(): Promise<number> {
-    const row = this.db
-      .prepare('SELECT COUNT(*) as count FROM episodic_entries')
-      .get() as { count: number }
+  async deleteMany(ids: string[]): Promise<number> {
+    if (ids.length === 0) return 0
+
+    // Use transaction for bulk delete
+    const deleteStmt = this.db.prepare('DELETE FROM episodic_entries WHERE id = ?')
+    const deleteAll = this.db.transaction((idsToDelete: string[]) => {
+      let deleted = 0
+      for (const id of idsToDelete) {
+        const result = deleteStmt.run(id)
+        deleted += result.changes
+      }
+      return deleted
+    })
+
+    return deleteAll(ids)
+  }
+
+  /**
+   * Get IDs of oldest entries (by created_at).
+   */
+  async getOldestIds(limit: number): Promise<string[]> {
+    const rows = this.db
+      .prepare('SELECT id FROM episodic_entries ORDER BY created_at ASC LIMIT ?')
+      .all(limit) as Array<{ id: string }>
+    return rows.map((row) => row.id)
+  }
+
+  /**
+   * Count entries.
+   *
+   * When userId is provided, counts only that user's entries (INV-5).
+   */
+  async count(userId?: string): Promise<number> {
+    let sql = 'SELECT COUNT(*) as count FROM episodic_entries'
+    const params: string[] = []
+
+    if (userId) {
+      sql += ' WHERE user_id = ?'
+      params.push(userId)
+    }
+
+    const row = this.db.prepare(sql).get(...params) as { count: number }
     return row.count
   }
 
@@ -191,6 +255,7 @@ export class SqliteVectorStore implements IVectorStore {
     return {
       id: row.id,
       type: 'episodic',
+      userId: row.user_id,
       content: row.content,
       embedding: JSON.parse(row.embedding),
       sessionId: row.session_id,

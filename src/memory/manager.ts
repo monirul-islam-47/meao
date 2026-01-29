@@ -17,14 +17,9 @@ import { WorkingMemory } from './working/index.js'
 import { EpisodicMemory } from './episodic/index.js'
 import { SemanticMemory } from './semantic/index.js'
 import type {
-  MemoryManagerConfig,
   MemoryContext,
-  WorkingMessage,
   EpisodicEntry,
   SemanticFact,
-  DEFAULT_WORKING_CONFIG,
-  DEFAULT_EPISODIC_CONFIG,
-  DEFAULT_SEMANTIC_CONFIG,
 } from './types.js'
 
 /**
@@ -119,17 +114,21 @@ export class MemoryManager {
   /**
    * Build context for an LLM conversation turn.
    *
+   * Enforces user data isolation (INV-5) by requiring userId.
+   *
    * Retrieves:
    * - Working memory history for the session
    * - Relevant episodic memories based on query similarity
    * - Relevant semantic facts based on query keywords
    *
+   * @param userId - User identifier for data isolation
    * @param sessionId - Session identifier
    * @param userQuery - Current user query
    * @param options - Context building options
    * @returns Memory context for the conversation
    */
   async buildContext(
+    userId: string,
     sessionId: string,
     userQuery: string,
     options: {
@@ -143,26 +142,32 @@ export class MemoryManager {
     const workingMessages = workingMemory.getHistory()
     const workingLabel = workingMemory.getLabel()
 
-    // Get relevant episodic memories
+    // Get relevant episodic memories (scoped by userId)
     let relevantEpisodic: EpisodicEntry[] = []
     if (this.episodicMemory && userQuery) {
       const episodicResults = await this.episodicMemory.search(
+        userId,
         userQuery,
         options.episodicLimit ?? 5,
         options.episodicMinSimilarity ?? 0.5
       )
-      // Remove similarity score for context (convert search results to entries)
-      relevantEpisodic = episodicResults.map(({ similarity, ...entry }) => entry)
+      // Strip similarity score AND embedding from context output
+      // Embeddings are large number arrays (1536+ dimensions) that would flood LLM context
+      relevantEpisodic = episodicResults.map(({ similarity: _similarity, embedding: _embedding, ...entry }) => ({
+        ...entry,
+        embedding: [], // Empty placeholder to satisfy EpisodicEntry type
+      }))
     }
 
-    // Get relevant semantic facts
+    // Get relevant semantic facts (scoped by userId)
     let relevantFacts: SemanticFact[] = []
     if (this.semanticMemory && userQuery) {
       // Extract potential subjects from query (simple keyword extraction)
       const words = userQuery.toLowerCase().split(/\s+/).filter((w) => w.length > 2)
 
-      // Query for high-confidence facts
+      // Query for high-confidence facts for this user
       const facts = await this.semanticMemory.getHighConfidence(
+        userId,
         options.semanticMinConfidence ?? 0.7
       )
 
@@ -186,12 +191,16 @@ export class MemoryManager {
   /**
    * Save a conversation turn to episodic memory.
    *
+   * Enforces user data isolation (INV-5) by requiring userId.
+   *
+   * @param userId - User identifier for data isolation
    * @param sessionId - Session identifier
    * @param turnNumber - Turn number in the conversation
    * @param messages - Messages from the turn
    * @param label - Content label for the turn
    */
   async saveTurnToEpisodic(
+    userId: string,
     sessionId: string,
     turnNumber: number,
     messages: Array<{ role: string; content: string }>,
@@ -208,6 +217,7 @@ export class MemoryManager {
     const participants = [...new Set(messages.map((m) => m.role))]
 
     await this.episodicMemory.add({
+      userId,
       content,
       sessionId,
       turnNumber,
