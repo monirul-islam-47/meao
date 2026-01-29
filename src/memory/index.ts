@@ -32,8 +32,9 @@ export {
   DEFAULT_SEMANTIC_CONFIG,
 } from './types.js'
 
-// Working Memory (to be added in M10.2)
-// export { WorkingMemory } from './working/index.js'
+// Working Memory
+export { WorkingMemory, type AddMessageResult } from './working/index.js'
+export { compactMessages, estimateSavings, type CompactionStrategy, type CompactionOptions } from './working/compaction.js'
 
 // Episodic Memory (to be added in M10.3)
 // export { EpisodicMemory } from './episodic/index.js'
