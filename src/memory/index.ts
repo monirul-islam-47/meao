@@ -36,9 +36,16 @@ export {
 export { WorkingMemory, type AddMessageResult } from './working/index.js'
 export { compactMessages, estimateSavings, type CompactionStrategy, type CompactionOptions } from './working/compaction.js'
 
-// Episodic Memory (to be added in M10.3)
-// export { EpisodicMemory } from './episodic/index.js'
-// export { EmbeddingGenerator } from './episodic/embeddings.js'
+// Episodic Memory
+export {
+  EpisodicMemory,
+  createEmbeddingGenerator,
+  cosineSimilarity,
+  SqliteVectorStore,
+  type IEmbeddingGenerator,
+  type IVectorStore,
+  type AddEpisodicInput,
+} from './episodic/index.js'
 
 // Semantic Memory (to be added in M10.4)
 // export { SemanticMemory } from './semantic/index.js'
