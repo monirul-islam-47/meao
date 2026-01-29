@@ -8,7 +8,9 @@ import { randomUUID } from 'crypto'
 import type { GatewayConfig, GatewayContext } from './types.js'
 import { registerHealthRoutes } from './routes/health.js'
 import { registerSessionRoutes } from './routes/sessions.js'
+import { registerAuthRoutes } from './routes/auth.js'
 import { registerWebSocket } from './websocket/handler.js'
+import { createAuthMiddleware } from './auth/middleware.js'
 
 /**
  * Create and configure the gateway server.
@@ -36,14 +38,24 @@ export async function createGateway(
 
   // Request correlation
   app.addHook('preHandler', async (request, reply) => {
-    // For localhost, auto-authenticate as owner
-    if (config.host === '127.0.0.1' || config.host === 'localhost') {
-      request.user = { id: 'local-owner', role: 'owner' }
-    }
-
     // Add request ID to reply headers
     reply.header('x-request-id', request.id)
   })
+
+  // Determine if this is a localhost-only gateway
+  const isLocalhostGateway = config.host === '127.0.0.1' || config.host === 'localhost'
+
+  // Authentication middleware
+  if (context.tokenStore) {
+    app.addHook('preHandler', createAuthMiddleware(context.tokenStore, { isLocalhostGateway }))
+  } else {
+    // No token store - localhost auto-auth only
+    app.addHook('preHandler', async (request) => {
+      if (isLocalhostGateway) {
+        request.user = { id: 'local-owner', role: 'owner' }
+      }
+    })
+  }
 
   // Error handler
   app.setErrorHandler((error, request, reply) => {
@@ -68,6 +80,15 @@ export async function createGateway(
   registerHealthRoutes(app, context)
   registerSessionRoutes(app, context)
   registerWebSocket(app, context)
+
+  // Register auth routes if pairing is enabled
+  if (context.pairing && context.tokenStore) {
+    registerAuthRoutes(app, {
+      pairing: context.pairing,
+      tokenStore: context.tokenStore,
+      auditLogger: context.auditLogger,
+    })
+  }
 
   return app
 }

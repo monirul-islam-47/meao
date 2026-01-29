@@ -6,6 +6,8 @@ import type { FastifyRequest } from 'fastify'
 import type { Orchestrator } from '../orchestrator/orchestrator.js'
 import type { SessionManager } from '../session/manager.js'
 import type { AuditLogger } from '../audit/service.js'
+import type { DevicePairing } from './auth/pairing.js'
+import type { TokenStore } from './auth/tokens.js'
 
 // Augment Fastify request to include user
 declare module 'fastify' {
@@ -37,6 +39,10 @@ export interface GatewayContext {
   sessionManager: SessionManager
   auditLogger: AuditLogger
   config: GatewayConfig
+  /** Optional: Token store for authentication */
+  tokenStore?: TokenStore
+  /** Optional: Device pairing manager */
+  pairing?: DevicePairing
 }
 
 /**
