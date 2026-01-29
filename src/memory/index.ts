@@ -63,5 +63,5 @@ export {
   DEFAULT_EXTRACTION_CONFIG,
 } from './semantic/extraction.js'
 
-// Memory Manager (to be added in M10.5)
-// export { MemoryManager } from './manager.js'
+// Memory Manager
+export { MemoryManager, type MemoryManagerOptions } from './manager.js'
