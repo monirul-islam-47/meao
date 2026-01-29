@@ -1,0 +1,25 @@
+#!/usr/bin/env node
+
+import { createRequire } from 'node:module'
+import { resolve } from 'node:path'
+import { pathToFileURL } from 'node:url'
+
+const require = createRequire(import.meta.url)
+const pkg = require('../package.json')
+
+const args = process.argv.slice(2)
+
+if (args.includes('--version') || args.includes('-v')) {
+  console.log(pkg.version)
+  process.exit(0)
+}
+
+// Run built output if present, else run source (useful during early dev)
+const distEntry = resolve(process.cwd(), 'dist', 'index.cjs')
+try {
+  await import(pathToFileURL(distEntry).href)
+} catch {
+  // Fallback to src for dev convenience
+  const srcEntry = resolve(process.cwd(), 'src', 'index.ts')
+  await import(pathToFileURL(srcEntry).href)
+}
