@@ -1,7 +1,58 @@
 import { z } from 'zod'
-import { writeFile, mkdir } from 'fs/promises'
+import { writeFile, mkdir, realpath } from 'fs/promises'
 import path from 'path'
 import type { ToolPlugin, ToolOutput, ToolContext } from '../types.js'
+
+/**
+ * Securely resolve a path within a working directory for writing.
+ * Blocks:
+ * - Absolute paths outside workDir
+ * - Path traversal (../)
+ * - Symlink escapes (checks parent directory for symlinks)
+ */
+async function resolveSecureWritePath(
+  filePath: string,
+  workDir: string
+): Promise<{ safe: boolean; resolvedPath: string; error?: string }> {
+  // Normalize the working directory
+  const normalizedWorkDir = path.resolve(workDir)
+
+  // Resolve the file path
+  let resolvedPath: string
+  if (path.isAbsolute(filePath)) {
+    resolvedPath = path.normalize(filePath)
+  } else {
+    resolvedPath = path.resolve(normalizedWorkDir, filePath)
+  }
+
+  // Check if resolved path is within workDir (before following symlinks)
+  if (!resolvedPath.startsWith(normalizedWorkDir + path.sep) && resolvedPath !== normalizedWorkDir) {
+    return {
+      safe: false,
+      resolvedPath,
+      error: 'Access denied: path outside working directory',
+    }
+  }
+
+  // For write operations, check if the parent directory (if it exists) has symlinks
+  // that would escape the workDir
+  const parentDir = path.dirname(resolvedPath)
+  try {
+    const realParentPath = await realpath(parentDir)
+    if (!realParentPath.startsWith(normalizedWorkDir + path.sep) && realParentPath !== normalizedWorkDir) {
+      return {
+        safe: false,
+        resolvedPath,
+        error: 'Access denied: parent directory symlink points outside working directory',
+      }
+    }
+  } catch {
+    // Parent doesn't exist yet, which is fine for write with createDirectories
+    // The resolved path is already validated to be within workDir
+  }
+
+  return { safe: true, resolvedPath }
+}
 
 /**
  * Write file tool - writes content to a file.
@@ -60,10 +111,18 @@ export const writeTool: ToolPlugin = {
     }
 
     try {
-      // Resolve path relative to working directory
-      const resolvedPath = path.isAbsolute(filePath)
-        ? filePath
-        : path.resolve(context.workDir, filePath)
+      // Securely resolve path within working directory
+      const { safe, resolvedPath, error } = await resolveSecureWritePath(
+        filePath,
+        context.workDir
+      )
+
+      if (!safe) {
+        return {
+          success: false,
+          output: error || 'Access denied',
+        }
+      }
 
       // Create parent directories if needed
       if (createDirectories) {
