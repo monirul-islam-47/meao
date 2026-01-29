@@ -5,6 +5,7 @@
 import { parseArgs } from './args.js'
 import { runDemo, listDemos, showDemo } from './demo.js'
 import { startSession, listSessions } from './session.js'
+import { startGatewayServer } from './gateway.js'
 
 export async function main(): Promise<void> {
   const { command, args, flags } = parseArgs(process.argv.slice(2))
@@ -28,6 +29,9 @@ export async function main(): Promise<void> {
       break
     case 'session':
       await handleSession(args, flags)
+      break
+    case 'gateway':
+      await handleGateway(flags)
       break
     default:
       // Default: start interactive session
@@ -105,11 +109,19 @@ Commands:
   }
 }
 
+async function handleGateway(flags: Record<string, boolean | string>): Promise<void> {
+  const host = (flags.host as string) || '127.0.0.1'
+  const port = parseInt(flags.port as string, 10) || 3141
+
+  await startGatewayServer({ host, port })
+}
+
 function printHelp(): void {
   console.log(`meao - Minimal Extensible AI Orchestrator
 
 Usage:
   meao [options]              Start interactive session
+  meao gateway                Start HTTP/WebSocket gateway
   meao demo <command>         Run demo workflows
   meao sessions list          List saved sessions
   meao session new            Start new session
@@ -120,6 +132,10 @@ Options:
   -v, --version   Show version
   --model <name>  Model to use (default: claude-sonnet-4-20250514)
   --work-dir      Working directory (default: current)
+
+Gateway Options:
+  --host <ip>     Host to bind (default: 127.0.0.1)
+  --port <port>   Port to bind (default: 3141, auto-fallback if busy)
 
 Demos:
   meao demo list              List available demos
