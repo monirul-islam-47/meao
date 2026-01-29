@@ -46,7 +46,7 @@ This document specifies the configuration system for meao - file locations, sche
 ~/.meao/                              # MEAO_HOME (can be overridden)
 ├── config.json                       # Main configuration
 ├── config.local.json                 # Local overrides (gitignored)
-├── credentials.enc                   # Encrypted credentials
+├── credentials.json                   # Encrypted credentials
 ├── keys/                             # Encryption keys
 │   ├── kek.salt
 │   └── *.dek.enc
@@ -214,7 +214,7 @@ const ProviderConfigSchema = z.object({
   primary: z.object({
     type: z.enum(['anthropic', 'openai', 'ollama']),
     model: z.string(),
-    // API key stored in credentials.enc, referenced here
+    // API key stored in credentials.json, referenced here
     apiKeyRef: z.string().optional(),  // e.g., 'anthropic_api_key'
     baseUrl: z.string().url().optional(),
     maxTokens: z.number().int().positive().default(4096),
@@ -939,7 +939,7 @@ All defaults follow secure-by-default principles:
 chmod 600 ~/.meao/config.json
 
 # Credentials must be owner-only
-chmod 600 ~/.meao/credentials.enc
+chmod 600 ~/.meao/credentials.json
 chmod 700 ~/.meao/keys/
 ```
 

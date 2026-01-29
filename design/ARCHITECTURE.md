@@ -562,7 +562,7 @@ Progressive voice support:
 ```
 ~/.meao/                             # Data directory
 ├── config.json                      # Main configuration
-├── credentials.enc                  # Encrypted credentials
+├── credentials.json                  # Encrypted credentials
 ├── preferences.json                 # User preferences (semantic memory)
 ├── sessions/                        # Working memory (per session)
 │   └── {user-id}/

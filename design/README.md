@@ -163,24 +163,24 @@ Three pillars:
     - [ ] bash network bypass attempts (container blocks)
     - [ ] DNS rebinding attack (proxy blocks)
 
-### Implementation (MVP)
+### Implementation (MVP) ✅
 15. [x] Create implementation roadmap → **IMPLEMENTATION.md**
-16. [ ] M0: Repository setup (build discipline)
-17. [ ] M1: Config system + credentials
-18. [ ] M1.5: Audit (thin logger + NEVER_LOG)
-19. [ ] M2: Security primitives (SecretDetector, Labels)
-20. [ ] M3: Audit (full - SecretDetector integration)
-21. [ ] M4: Sandbox (process + container network=none)
-22. [ ] M5: Tool system (registry + executor + builtins)
-23. [ ] M6: CLI channel
-24. [ ] M7: Provider (MockProvider + Anthropic)
-25. [ ] M8: Orchestrator (golden path)
+16. [x] M0: Repository setup (build discipline)
+17. [x] M1: Config system + credentials
+18. [x] M1.5: Audit (thin logger + NEVER_LOG)
+19. [x] M2: Security primitives (SecretDetector, Labels)
+20. [x] M3: Audit (full - SecretDetector integration)
+21. [x] M4: Sandbox (process + container network=none)
+22. [x] M5: Tool system (registry + executor + builtins)
+23. [x] M6: CLI channel
+24. [x] M7: Provider (MockProvider + Anthropic)
+25. [x] M8: Orchestrator (golden path)
 
-### Implementation (Phase 2+)
-26. [ ] M9: Gateway (HTTP + WebSocket)
+### Implementation (Phase 2)
+26. [x] M9: Gateway (HTTP + WebSocket + Auth/Pairing)
 27. [ ] M10: Memory system
 28. [ ] M11: Telegram channel
 
 ---
 
-*Last updated: 2026-01-29* (added implementation roadmap)
+*Last updated: 2026-01-29* (updated milestone status through M9)

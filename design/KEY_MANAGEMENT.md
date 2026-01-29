@@ -1,10 +1,12 @@
 # Key Management
 
-**Status:** ACTIVE
+**Status:** PLANNED (not yet implemented)
 **Version:** 1.0
 **Last Updated:** 2026-01-29
 
-This document specifies how meao handles encryption keys: generation, storage, rotation, and migration.
+This document specifies how meao will handle encryption keys: generation, storage, rotation, and migration.
+
+> **Current State:** Credentials are stored in plaintext `credentials.json`. The encryption system described here is planned for a future milestone. Once implemented, credentials will be encrypted as `credentials.enc`.
 
 ---
 

@@ -180,7 +180,7 @@ export function getConfigPath(): string {
 }
 
 export function getCredentialsPath(): string {
-  return path.join(getMeaoHome(), 'credentials.enc')
+  return path.join(getMeaoHome(), 'credentials.json')
 }
 
 export function getLogsPath(): string {

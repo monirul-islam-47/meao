@@ -367,7 +367,7 @@ Attack requires user to actively install malicious code.
 
 ```
 ATTACK:
-Malware on host reads ~/.meao/credentials.enc
+Malware on host reads ~/.meao/credentials.json
 
 MITIGATIONS:
 1. Credentials encrypted at rest (AES-256-GCM)
