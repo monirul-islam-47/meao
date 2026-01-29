@@ -486,6 +486,53 @@ Sandbox provides defense in depth.
 
 ---
 
+## Known Limitations
+
+### DNS TOCTOU Vulnerability (Tracked)
+
+**Status:** Known limitation, deferred fix (complex)
+**Severity:** Medium (requires attacker-controlled DNS)
+**Tracking:** Task #8
+
+**Issue:** There is a Time-of-Check to Time-of-Use (TOCTOU) race condition in network egress validation. The `NetworkGuard.checkUrl()` validates a hostname by resolving DNS and checking the IP is not private/metadata. However, `fetch()` then performs its own DNS resolution, creating a window where an attacker controlling DNS can change the record.
+
+**Attack scenario:**
+```
+1. NetworkGuard resolves evil.com → 1.2.3.4 (public IP) ✓ ALLOWED
+2. Attacker changes DNS record (TTL expired or fast-flux)
+3. fetch() resolves evil.com → 169.254.169.254 (AWS metadata)
+4. Request goes to cloud metadata endpoint, leaking credentials
+```
+
+**Current mitigations:**
+- DNS results are cached (reduces window but doesn't eliminate it)
+- Cloud metadata endpoints are blocked by IP pattern matching
+- Private IP ranges are blocked
+
+**Why not fixed yet:**
+- Node.js `fetch()` doesn't expose socket-level control to pin IPs
+- Requires custom HTTP agent with DNS override (e.g., `undici`)
+- Must handle both IPv4 and IPv6, plus HTTPS/TLS SNI complications
+- Significant implementation complexity for edge-case attack
+
+**Potential future fixes:**
+1. **IP Pinning:** Return resolved IP from `checkUrl()`, use custom agent to connect directly to validated IP
+2. **Post-connection validation:** After `fetch()`, verify connected IP matches expected (requires socket access)
+3. **DNS pinning with request-scoped cache:** Lock DNS for duration of request lifecycle
+
+**Impact assessment:**
+- Requires attacker to control DNS for target domain
+- Attacker must win race condition (timing-dependent)
+- Most real attacks would use domains they control, making redirect validation more relevant
+- Cloud metadata attack requires specific cloud environment
+
+**References:**
+- `src/security/network/guard.ts` - DNS validation at check time
+- `src/tools/builtin/web_fetch.ts` - Separate fetch() call
+- `src/security/network/dns.ts` - DNS resolver with caching
+
+---
+
 ## Incident Response
 
 ### If Credentials Compromised
