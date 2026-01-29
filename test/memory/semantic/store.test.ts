@@ -100,7 +100,7 @@ describe('SqliteSemanticStore', () => {
       await store.insert(createFact({ id: 'b', subject: 'bob' }))
       await store.insert(createFact({ id: 'c', subject: 'alice' }))
 
-      const results = await store.query({ subject: 'alice' })
+      const results = await store.query({ userId: 'test-user-1', subject: 'alice' })
 
       expect(results).toHaveLength(2)
       expect(results.every((r) => r.subject === 'alice')).toBe(true)
@@ -111,7 +111,7 @@ describe('SqliteSemanticStore', () => {
       await store.insert(createFact({ id: 'b', predicate: 'dislikes' }))
       await store.insert(createFact({ id: 'c', predicate: 'likes' }))
 
-      const results = await store.query({ predicate: 'likes' })
+      const results = await store.query({ userId: 'test-user-1', predicate: 'likes' })
 
       expect(results).toHaveLength(2)
     })
@@ -120,7 +120,7 @@ describe('SqliteSemanticStore', () => {
       await store.insert(createFact({ id: 'a', object: 'coffee' }))
       await store.insert(createFact({ id: 'b', object: 'tea' }))
 
-      const results = await store.query({ object: 'coffee' })
+      const results = await store.query({ userId: 'test-user-1', object: 'coffee' })
 
       expect(results).toHaveLength(1)
       expect(results[0].object).toBe('coffee')
@@ -131,7 +131,7 @@ describe('SqliteSemanticStore', () => {
       await store.insert(createFact({ id: 'b', factType: 'entity' }))
       await store.insert(createFact({ id: 'c', factType: 'preference' }))
 
-      const results = await store.query({ factType: 'preference' })
+      const results = await store.query({ userId: 'test-user-1', factType: 'preference' })
 
       expect(results).toHaveLength(2)
     })
@@ -141,7 +141,7 @@ describe('SqliteSemanticStore', () => {
       await store.insert(createFact({ id: 'b', confidence: 0.9 }))
       await store.insert(createFact({ id: 'c', confidence: 0.7 }))
 
-      const results = await store.query({ minConfidence: 0.7 })
+      const results = await store.query({ userId: 'test-user-1', minConfidence: 0.7 })
 
       expect(results).toHaveLength(2)
       expect(results.every((r) => r.confidence >= 0.7)).toBe(true)
@@ -154,7 +154,7 @@ describe('SqliteSemanticStore', () => {
       await store.insert(createFact({ id: 'old', createdAt: oldDate }))
       await store.insert(createFact({ id: 'new', createdAt: newDate }))
 
-      const results = await store.query({ since: new Date('2024-03-01') })
+      const results = await store.query({ userId: 'test-user-1', since: new Date('2024-03-01') })
 
       expect(results).toHaveLength(1)
       expect(results[0].id).toBe('new')
@@ -165,7 +165,7 @@ describe('SqliteSemanticStore', () => {
         await store.insert(createFact({ id: `fact-${i}` }))
       }
 
-      const results = await store.query({ limit: 5 })
+      const results = await store.query({ userId: 'test-user-1', limit: 5 })
 
       expect(results).toHaveLength(5)
     })
@@ -176,6 +176,7 @@ describe('SqliteSemanticStore', () => {
       await store.insert(createFact({ id: 'c', subject: 'bob', confidence: 0.9 }))
 
       const results = await store.query({
+        userId: 'test-user-1',
         subject: 'alice',
         minConfidence: 0.8,
       })
@@ -189,11 +190,45 @@ describe('SqliteSemanticStore', () => {
       await store.insert(createFact({ id: 'b', confidence: 0.9 }))
       await store.insert(createFact({ id: 'c', confidence: 0.7 }))
 
-      const results = await store.query({})
+      const results = await store.query({ userId: 'test-user-1' })
 
       expect(results[0].confidence).toBe(0.9)
       expect(results[1].confidence).toBe(0.7)
       expect(results[2].confidence).toBe(0.5)
+    })
+  })
+
+  describe('INV-5: user data isolation', () => {
+    it('query throws if userId is missing', async () => {
+      await store.insert(createFact({ id: 'a' }))
+
+      await expect(store.query({ userId: '' })).rejects.toThrow('userId is required')
+    })
+
+    it('query throws if userId is whitespace only', async () => {
+      await store.insert(createFact({ id: 'a' }))
+
+      await expect(store.query({ userId: '   ' })).rejects.toThrow('userId is required')
+    })
+
+    it('query only returns facts for specified user', async () => {
+      await store.insert(createFact({ id: 'user1-fact', userId: 'user-1' }))
+      await store.insert(createFact({ id: 'user2-fact', userId: 'user-2' }))
+
+      const results = await store.query({ userId: 'user-1' })
+
+      expect(results).toHaveLength(1)
+      expect(results[0].id).toBe('user1-fact')
+    })
+
+    it('count scopes by userId when provided', async () => {
+      await store.insert(createFact({ id: 'user1-a', userId: 'user-1' }))
+      await store.insert(createFact({ id: 'user1-b', userId: 'user-1' }))
+      await store.insert(createFact({ id: 'user2-a', userId: 'user-2' }))
+
+      expect(await store.count('user-1')).toBe(2)
+      expect(await store.count('user-2')).toBe(1)
+      expect(await store.count()).toBe(3) // Total without userId
     })
   })
 

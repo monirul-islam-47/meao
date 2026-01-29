@@ -13,21 +13,23 @@ import { cosineSimilarity } from './embeddings.js'
  * Vector store interface.
  *
  * All operations that return data require userId for user isolation (INV-5).
+ * Operations that query multiple entries MUST have userId to prevent cross-user leaks.
  */
 export interface IVectorStore {
   insert(entry: EpisodicEntry): Promise<void>
   search(
     queryEmbedding: number[],
     limit: number,
-    minSimilarity?: number,
-    userId?: string
+    minSimilarity: number,
+    userId: string // Required for INV-5
   ): Promise<EpisodicSearchResult[]>
-  query(filter: { userId?: string; sessionId?: string; since?: Date }): Promise<EpisodicEntry[]>
+  query(filter: { userId: string; sessionId?: string; since?: Date }): Promise<EpisodicEntry[]> // userId required
   get(id: string): Promise<EpisodicEntry | null>
   delete(id: string): Promise<boolean>
   deleteMany(ids: string[]): Promise<number>
+  deleteManyByUser(userId: string, ids: string[]): Promise<number> // Scoped delete for retention
   count(userId?: string): Promise<number>
-  getOldestIds(limit: number): Promise<string[]>
+  getOldestIdsByUser(userId: string, limit: number): Promise<string[]> // Scoped for retention
   close(): void
 }
 
@@ -40,10 +42,10 @@ export interface IVectorStore {
 export class SqliteVectorStore implements IVectorStore {
   private db: Database.Database
   // Store dimensions for future use (e.g., validation)
-  private _dimensions: number
+  readonly dimensions: number
 
   constructor(path: string, dimensions: number = 1536) {
-    this._dimensions = dimensions
+    this.dimensions = dimensions
     this.db = new Database(path)
     this.initSchema()
   }
@@ -102,24 +104,23 @@ export class SqliteVectorStore implements IVectorStore {
   /**
    * Search for similar entries using brute-force cosine similarity.
    *
-   * When userId is provided, only searches that user's entries (INV-5).
+   * userId is REQUIRED to enforce user data isolation (INV-5).
+   * Throws if userId is missing or empty.
    */
   async search(
     queryEmbedding: number[],
     limit: number,
     minSimilarity: number = 0,
-    userId?: string
+    userId: string
   ): Promise<EpisodicSearchResult[]> {
-    // Get entries (filtered by userId if provided)
-    let sql = 'SELECT * FROM episodic_entries'
-    const params: string[] = []
-
-    if (userId) {
-      sql += ' WHERE user_id = ?'
-      params.push(userId)
+    // INV-5: Enforce user data isolation - reject if no userId
+    if (!userId || userId.trim() === '') {
+      throw new Error('userId is required for episodic search (INV-5: user data isolation)')
     }
 
-    const rows = this.db.prepare(sql).all(...params) as any[]
+    // Get entries filtered by userId
+    const sql = 'SELECT * FROM episodic_entries WHERE user_id = ?'
+    const rows = this.db.prepare(sql).all(userId) as any[]
 
     // Calculate similarities
     const results: EpisodicSearchResult[] = []
@@ -144,16 +145,17 @@ export class SqliteVectorStore implements IVectorStore {
   /**
    * Query entries by filter.
    *
-   * When userId is provided, only returns that user's entries (INV-5).
+   * userId is REQUIRED to enforce user data isolation (INV-5).
+   * Throws if userId is missing or empty.
    */
-  async query(filter: { userId?: string; sessionId?: string; since?: Date }): Promise<EpisodicEntry[]> {
-    let sql = 'SELECT * FROM episodic_entries WHERE 1=1'
-    const params: any[] = []
-
-    if (filter.userId) {
-      sql += ' AND user_id = ?'
-      params.push(filter.userId)
+  async query(filter: { userId: string; sessionId?: string; since?: Date }): Promise<EpisodicEntry[]> {
+    // INV-5: Enforce user data isolation - reject if no userId
+    if (!filter.userId || filter.userId.trim() === '') {
+      throw new Error('userId is required for episodic query (INV-5: user data isolation)')
     }
+
+    let sql = 'SELECT * FROM episodic_entries WHERE user_id = ?'
+    const params: any[] = [filter.userId]
 
     if (filter.sessionId) {
       sql += ' AND session_id = ?'
@@ -214,13 +216,44 @@ export class SqliteVectorStore implements IVectorStore {
   }
 
   /**
-   * Get IDs of oldest entries (by created_at).
+   * Get IDs of oldest entries for a specific user (by created_at).
+   *
+   * Scoped by userId for per-user retention enforcement.
    */
-  async getOldestIds(limit: number): Promise<string[]> {
+  async getOldestIdsByUser(userId: string, limit: number): Promise<string[]> {
+    if (!userId || userId.trim() === '') {
+      throw new Error('userId is required for getOldestIdsByUser (INV-5: user data isolation)')
+    }
+
     const rows = this.db
-      .prepare('SELECT id FROM episodic_entries ORDER BY created_at ASC LIMIT ?')
-      .all(limit) as Array<{ id: string }>
+      .prepare('SELECT id FROM episodic_entries WHERE user_id = ? ORDER BY created_at ASC LIMIT ?')
+      .all(userId, limit) as Array<{ id: string }>
     return rows.map((row) => row.id)
+  }
+
+  /**
+   * Delete multiple entries by IDs, scoped to a specific user.
+   *
+   * Only deletes entries belonging to the specified user (safety check).
+   */
+  async deleteManyByUser(userId: string, ids: string[]): Promise<number> {
+    if (!userId || userId.trim() === '') {
+      throw new Error('userId is required for deleteManyByUser (INV-5: user data isolation)')
+    }
+    if (ids.length === 0) return 0
+
+    // Use transaction for bulk delete, with user scope for safety
+    const deleteStmt = this.db.prepare('DELETE FROM episodic_entries WHERE id = ? AND user_id = ?')
+    const deleteAll = this.db.transaction((idsToDelete: string[], uid: string) => {
+      let deleted = 0
+      for (const id of idsToDelete) {
+        const result = deleteStmt.run(id, uid)
+        deleted += result.changes
+      }
+      return deleted
+    })
+
+    return deleteAll(ids, userId)
   }
 
   /**

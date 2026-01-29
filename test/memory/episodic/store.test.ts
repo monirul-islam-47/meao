@@ -105,7 +105,7 @@ describe('SqliteVectorStore', () => {
       await store.insert(entry2)
 
       // Search with embedding similar to entry1
-      const results = await store.search([0.9, 0.1, 0, 0], 10)
+      const results = await store.search([0.9, 0.1, 0, 0], 10, 0, 'test-user-1')
 
       expect(results.length).toBeGreaterThan(0)
       expect(results[0].id).toBe('similar')
@@ -118,7 +118,7 @@ describe('SqliteVectorStore', () => {
       }
 
       // Use minSimilarity=-1 to include all entries (cosine similarity range is -1 to 1)
-      const results = await store.search([0.5, 0.5, 0.5, 0.5], 5, -1)
+      const results = await store.search([0.5, 0.5, 0.5, 0.5], 5, -1, 'test-user-1')
       expect(results).toHaveLength(5)
     })
 
@@ -137,7 +137,7 @@ describe('SqliteVectorStore', () => {
       await store.insert(entry2)
 
       // Search with high minSimilarity
-      const results = await store.search([1, 0, 0, 0], 10, 0.9)
+      const results = await store.search([1, 0, 0, 0], 10, 0.9, 'test-user-1')
 
       // Should only find the highly similar entry
       expect(results.every((r) => r.similarity >= 0.9)).toBe(true)
@@ -155,7 +155,7 @@ describe('SqliteVectorStore', () => {
       }
 
       // Search for something similar to [1, 0, 0, 0]
-      const results = await store.search([1, 0, 0, 0], 10)
+      const results = await store.search([1, 0, 0, 0], 10, 0, 'test-user-1')
 
       // Should be sorted by similarity (highest first)
       for (let i = 1; i < results.length; i++) {
@@ -172,7 +172,7 @@ describe('SqliteVectorStore', () => {
       await store.insert(createEntry({ id: 'b', sessionId: 'session-2' }))
       await store.insert(createEntry({ id: 'c', sessionId: 'session-1' }))
 
-      const results = await store.query({ sessionId: 'session-1' })
+      const results = await store.query({ userId: 'test-user-1', sessionId: 'session-1' })
 
       expect(results).toHaveLength(2)
       expect(results.every((r) => r.sessionId === 'session-1')).toBe(true)
@@ -185,7 +185,7 @@ describe('SqliteVectorStore', () => {
       await store.insert(createEntry({ id: 'old', createdAt: oldDate }))
       await store.insert(createEntry({ id: 'new', createdAt: newDate }))
 
-      const results = await store.query({ since: new Date('2024-03-01') })
+      const results = await store.query({ userId: 'test-user-1', since: new Date('2024-03-01') })
 
       expect(results).toHaveLength(1)
       expect(results[0].id).toBe('new')
@@ -205,6 +205,7 @@ describe('SqliteVectorStore', () => {
       )
 
       const results = await store.query({
+        userId: 'test-user-1',
         sessionId: 'session-1',
         since: new Date('2024-03-01'),
       })
@@ -267,71 +268,108 @@ describe('SqliteVectorStore', () => {
     })
   })
 
-  describe('getOldestIds', () => {
-    it('returns ids of oldest entries', async () => {
+  describe('getOldestIdsByUser', () => {
+    it('returns ids of oldest entries for a user', async () => {
       // Insert with explicit timestamps
       await store.insert(
-        createEntry({ id: 'old', createdAt: new Date('2024-01-01') })
+        createEntry({ id: 'old', userId: 'user-1', createdAt: new Date('2024-01-01') })
       )
       await store.insert(
-        createEntry({ id: 'mid', createdAt: new Date('2024-06-01') })
+        createEntry({ id: 'mid', userId: 'user-1', createdAt: new Date('2024-06-01') })
       )
       await store.insert(
-        createEntry({ id: 'new', createdAt: new Date('2024-12-01') })
+        createEntry({ id: 'new', userId: 'user-1', createdAt: new Date('2024-12-01') })
       )
 
-      const oldest = await store.getOldestIds(2)
+      const oldest = await store.getOldestIdsByUser('user-1', 2)
 
       expect(oldest).toHaveLength(2)
       expect(oldest[0]).toBe('old')
       expect(oldest[1]).toBe('mid')
     })
 
-    it('returns empty array when no entries', async () => {
-      const oldest = await store.getOldestIds(5)
-      expect(oldest).toHaveLength(0)
+    it('only returns entries for specified user', async () => {
+      await store.insert(
+        createEntry({ id: 'user1-old', userId: 'user-1', createdAt: new Date('2024-01-01') })
+      )
+      await store.insert(
+        createEntry({ id: 'user2-old', userId: 'user-2', createdAt: new Date('2024-01-01') })
+      )
+
+      const oldest = await store.getOldestIdsByUser('user-1', 10)
+
+      expect(oldest).toHaveLength(1)
+      expect(oldest[0]).toBe('user1-old')
     })
 
-    it('returns all ids if limit exceeds count', async () => {
-      await store.insert(createEntry({ id: 'a' }))
-      await store.insert(createEntry({ id: 'b' }))
-
-      const oldest = await store.getOldestIds(10)
-      expect(oldest).toHaveLength(2)
+    it('throws if userId is missing', async () => {
+      await expect(store.getOldestIdsByUser('', 5)).rejects.toThrow('userId is required')
     })
   })
 
-  describe('deleteMany', () => {
-    it('deletes multiple entries by ids', async () => {
-      await store.insert(createEntry({ id: 'a' }))
-      await store.insert(createEntry({ id: 'b' }))
-      await store.insert(createEntry({ id: 'c' }))
-      await store.insert(createEntry({ id: 'd' }))
+  describe('deleteManyByUser', () => {
+    it('deletes multiple entries by ids for a user', async () => {
+      await store.insert(createEntry({ id: 'a', userId: 'user-1' }))
+      await store.insert(createEntry({ id: 'b', userId: 'user-1' }))
+      await store.insert(createEntry({ id: 'c', userId: 'user-1' }))
 
-      const deleted = await store.deleteMany(['a', 'c'])
+      const deleted = await store.deleteManyByUser('user-1', ['a', 'c'])
 
       expect(deleted).toBe(2)
       expect(await store.get('a')).toBeNull()
       expect(await store.get('b')).not.toBeNull()
       expect(await store.get('c')).toBeNull()
-      expect(await store.get('d')).not.toBeNull()
     })
 
-    it('returns 0 for empty id array', async () => {
+    it('only deletes entries belonging to specified user', async () => {
+      await store.insert(createEntry({ id: 'user1-entry', userId: 'user-1' }))
+      await store.insert(createEntry({ id: 'user2-entry', userId: 'user-2' }))
+
+      // Try to delete user2's entry using user1's scope
+      const deleted = await store.deleteManyByUser('user-1', ['user2-entry'])
+
+      expect(deleted).toBe(0) // Should not delete
+      expect(await store.get('user2-entry')).not.toBeNull() // Entry still exists
+    })
+
+    it('throws if userId is missing', async () => {
+      await expect(store.deleteManyByUser('', ['a'])).rejects.toThrow('userId is required')
+    })
+  })
+
+  describe('INV-5: user data isolation', () => {
+    it('search throws if userId is missing', async () => {
       await store.insert(createEntry({ id: 'a' }))
 
-      const deleted = await store.deleteMany([])
-      expect(deleted).toBe(0)
-      expect(await store.count()).toBe(1)
+      await expect(store.search([0.5, 0.5, 0.5, 0.5], 10, 0, '')).rejects.toThrow(
+        'userId is required'
+      )
     })
 
-    it('returns count of actually deleted entries', async () => {
-      await store.insert(createEntry({ id: 'exists' }))
+    it('query throws if userId is missing', async () => {
+      await store.insert(createEntry({ id: 'a' }))
 
-      // Try to delete one existing and one non-existing
-      const deleted = await store.deleteMany(['exists', 'non-existent'])
+      await expect(store.query({ userId: '' })).rejects.toThrow('userId is required')
+    })
 
-      expect(deleted).toBe(1)
+    it('search only returns entries for specified user', async () => {
+      await store.insert(createEntry({ id: 'user1', userId: 'user-1', embedding: [1, 0, 0, 0] }))
+      await store.insert(createEntry({ id: 'user2', userId: 'user-2', embedding: [1, 0, 0, 0] }))
+
+      const results = await store.search([1, 0, 0, 0], 10, 0, 'user-1')
+
+      expect(results).toHaveLength(1)
+      expect(results[0].id).toBe('user1')
+    })
+
+    it('query only returns entries for specified user', async () => {
+      await store.insert(createEntry({ id: 'user1', userId: 'user-1' }))
+      await store.insert(createEntry({ id: 'user2', userId: 'user-2' }))
+
+      const results = await store.query({ userId: 'user-1' })
+
+      expect(results).toHaveLength(1)
+      expect(results[0].id).toBe('user1')
     })
   })
 })

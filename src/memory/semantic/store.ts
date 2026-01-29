@@ -26,10 +26,11 @@ export interface ISemanticStore {
 /**
  * Filter options for querying semantic facts.
  *
- * userId should be provided for user data isolation (INV-5).
+ * userId is REQUIRED for user data isolation (INV-5).
+ * Query will throw if userId is missing or empty.
  */
 export interface SemanticQueryFilter {
-  userId?: string // For user data isolation
+  userId: string // Required for user data isolation (INV-5)
   subject?: string
   predicate?: string
   object?: string
@@ -152,16 +153,17 @@ export class SqliteSemanticStore implements ISemanticStore {
   /**
    * Query facts by filter.
    *
-   * When userId is provided, only returns that user's facts (INV-5).
+   * userId is REQUIRED to enforce user data isolation (INV-5).
+   * Throws if userId is missing or empty.
    */
   async query(filter: SemanticQueryFilter): Promise<SemanticFact[]> {
-    let sql = 'SELECT * FROM semantic_facts WHERE 1=1'
-    const params: any[] = []
-
-    if (filter.userId) {
-      sql += ' AND user_id = ?'
-      params.push(filter.userId)
+    // INV-5: Enforce user data isolation - reject if no userId
+    if (!filter.userId || filter.userId.trim() === '') {
+      throw new Error('userId is required for semantic query (INV-5: user data isolation)')
     }
+
+    let sql = 'SELECT * FROM semantic_facts WHERE user_id = ?'
+    const params: any[] = [filter.userId]
 
     if (filter.subject) {
       sql += ' AND subject = ?'

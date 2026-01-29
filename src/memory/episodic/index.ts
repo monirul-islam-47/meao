@@ -120,8 +120,8 @@ export class EpisodicMemory {
     // Store entry
     await this.store.insert(entry)
 
-    // Enforce max entries limit
-    await this.enforceLimit()
+    // Enforce max entries limit (per-user to prevent cross-user eviction)
+    await this.enforceLimitForUser(input.userId)
 
     return id
   }
@@ -211,24 +211,29 @@ export class EpisodicMemory {
   }
 
   /**
-   * Enforce max entries limit by removing oldest entries.
+   * Enforce max entries limit for a specific user.
    *
-   * When entry count exceeds maxEntries, deletes the oldest
+   * When a user's entry count exceeds maxEntries, deletes their oldest
    * entries to bring the count back to the limit.
+   *
+   * Scoped per-user to prevent one noisy user from evicting another's memories.
+   *
+   * @param userId - User to enforce limit for
    */
-  private async enforceLimit(): Promise<void> {
-    const count = await this.store.count()
+  private async enforceLimitForUser(userId: string): Promise<void> {
+    // Count only this user's entries
+    const count = await this.store.count(userId)
     if (count <= this.maxEntries) return
 
     // Calculate how many entries need to be removed
     const toRemove = count - this.maxEntries
 
-    // Get IDs of oldest entries
-    const oldestIds = await this.store.getOldestIds(toRemove)
+    // Get IDs of this user's oldest entries
+    const oldestIds = await this.store.getOldestIdsByUser(userId, toRemove)
     if (oldestIds.length === 0) return
 
-    // Delete oldest entries
-    await this.store.deleteMany(oldestIds)
+    // Delete oldest entries (with user scope for safety)
+    await this.store.deleteManyByUser(userId, oldestIds)
   }
 }
 
