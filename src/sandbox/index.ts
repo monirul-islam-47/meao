@@ -21,7 +21,11 @@ export { ProcessSandbox } from './process.js'
 export { ContainerSandbox, isDockerAvailable } from './container/index.js'
 
 // Unified executor
-export { SandboxExecutor, type SandboxExecutorConfig } from './executor.js'
+export {
+  SandboxExecutor,
+  type SandboxExecutorConfig,
+  type ExecutionOptions,
+} from './executor.js'
 
 // Audit helpers
 export {

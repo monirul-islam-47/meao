@@ -53,9 +53,26 @@ describe('bashTool', () => {
 
     const result = await bashTool.execute({ command: 'echo hello' }, context)
 
-    expect(context.sandbox.execute).toHaveBeenCalledWith('echo hello', 'bash')
+    expect(context.sandbox.execute).toHaveBeenCalledWith('echo hello', 'bash', {
+      workDir: '/tmp',
+      timeout: undefined,
+    })
     expect(result.success).toBe(true)
     expect(result.output).toContain('command output')
+  })
+
+  it('passes custom workDir and timeout to sandbox', async () => {
+    const context = createMockContext()
+
+    await bashTool.execute(
+      { command: 'ls', workDir: '/custom', timeout: 5000 },
+      context
+    )
+
+    expect(context.sandbox.execute).toHaveBeenCalledWith('ls', 'bash', {
+      workDir: '/custom',
+      timeout: 5000,
+    })
   })
 
   it('includes stderr in output', async () => {

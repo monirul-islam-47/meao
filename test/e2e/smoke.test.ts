@@ -390,9 +390,10 @@ The API key is: ${fakeSecret}
   describe('Scenario 3: Secret Redaction Invariant', () => {
     it('never leaks secrets in any output path', async () => {
       // Create file with various secret patterns
+      // Note: AWS key uses realistic format without "EXAMPLE" which would be filtered as false positive
       const secrets = {
         github: 'ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghij',
-        aws: 'AKIAIOSFODNN7EXAMPLE',
+        aws: 'AKIAIOSFODNN7TESTING',
         jwt: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U',
       }
 

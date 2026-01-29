@@ -23,7 +23,7 @@ import type {
   ProviderResponse,
 } from '../provider/types.js'
 import type { ToolPlugin, ToolContext, ApprovalRequest } from '../tools/types.js'
-import { computeApprovalId } from '../tools/types.js'
+import { ToolExecutor } from '../tools/executor.js'
 import { secretDetector } from '../security/secrets/index.js'
 import { ToolCallAssembler } from './tool-call-assembler.js'
 
@@ -42,6 +42,9 @@ export class Orchestrator extends TypedEventEmitter {
   private deps: OrchestratorDependencies
   private session: Session
   private currentTurn: Turn | null = null
+  private toolExecutor: ToolExecutor
+  private messageQueue: string[] = []
+  private readonly maxQueueSize = 5
 
   constructor(
     deps: OrchestratorDependencies,
@@ -50,6 +53,10 @@ export class Orchestrator extends TypedEventEmitter {
     super()
     this.deps = deps
     this.config = { ...DEFAULT_CONFIG, ...config }
+
+    // Initialize tool executor with approval manager
+    // This is the SINGLE enforcement point for all tool execution
+    this.toolExecutor = new ToolExecutor(deps.approvalManager)
 
     // Initialize session
     this.session = this.createSession()
@@ -420,6 +427,9 @@ export class Orchestrator extends TypedEventEmitter {
       this.currentTurn!.toolCalls.push(toolCall)
       this.emit('toolCallStart' as any, toolCall)
 
+      // Redact secrets from args before sending to channel (prevent leaks to UI/logs)
+      const redactedArgs = this.redactArgsSecrets(toolUse.input)
+
       // Send tool use to channel
       await this.deps.channel.send({
         type: 'tool_use',
@@ -427,7 +437,7 @@ export class Orchestrator extends TypedEventEmitter {
         timestamp: new Date(),
         sessionId: this.session.id,
         name: toolUse.name,
-        args: toolUse.input,
+        args: redactedArgs,
       })
 
       try {
@@ -495,7 +505,15 @@ export class Orchestrator extends TypedEventEmitter {
   }
 
   /**
-   * Execute a single tool.
+   * Execute a single tool via ToolExecutor (the single enforcement point).
+   *
+   * ToolExecutor handles:
+   * - Argument validation
+   * - Conditional approval checks (method, host, etc.)
+   * - Network guard enforcement
+   * - Secret redaction in output
+   * - Label propagation
+   * - Audit logging
    */
   private async executeTool(
     name: string,
@@ -520,59 +538,34 @@ export class Orchestrator extends TypedEventEmitter {
       workDir: this.config.workDir,
     }
 
-    // Check if approval is needed using the ApprovalManager
+    // Emit approval required event for UI notification when tool needs approval
+    // (ToolExecutor will actually handle the approval flow)
     if (tool.capability.approval.level !== 'auto') {
-      const approvalId = computeApprovalId(name, 'execute', JSON.stringify(args))
-
-      // Check if already approved in this session
-      if (!this.deps.approvalManager.hasApproval(context, approvalId)) {
-        const request: ApprovalRequest = {
-          id: approvalId,
-          tool: name,
-          action: 'execute',
-          target: this.formatToolTarget(args),
-          reason: `Tool ${name} requires approval`,
-          isDangerous: this.isDangerousTool(tool, args),
-        }
-
-        // Emit event for UI notification (non-blocking)
-        this.emit('approvalRequired' as any, request)
-
-        // Use approvalManager to get decision
-        this.setState('waiting_approval')
-        const approved = await this.deps.approvalManager.request(request, context)
-        this.setState('executing_tool')
-
-        if (!approved) {
-          return {
-            success: false,
-            output: 'Tool execution denied by user',
-          }
-        }
-
-        // Remember approval for this session
-        this.deps.approvalManager.addApproval(context, approvalId)
-      }
-    }
-
-    // Execute the tool
-    const result = await tool.execute(args, context)
-
-    // Redact any secrets from the output before returning
-    const { redacted: sanitizedOutput, findings } = secretDetector.redact(result.output)
-
-    // Log if secrets were detected and redacted
-    if (findings.length > 0) {
-      await this.deps.auditLogger.warn('security', 'secrets_redacted', {
+      this.emit('approvalRequired' as any, {
+        id: callId,
         tool: name,
-        secretTypes: findings.map((f) => f.type),
-        count: findings.length,
+        action: 'execute',
+        target: this.formatToolTarget(args),
+        reason: `Tool ${name} requires approval`,
+        isDangerous: this.isDangerousTool(tool, args),
       })
+      this.setState('waiting_approval')
     }
 
+    // Execute through ToolExecutor - this is the SINGLE enforcement choke point
+    // It handles: validation, approval conditions, network guard, execution,
+    // secret redaction, label propagation, and audit logging
+    const result = await this.toolExecutor.execute(tool, args, context)
+
+    if (tool.capability.approval.level !== 'auto') {
+      this.setState('executing_tool')
+    }
+
+    // Return result with label (fixing label propagation)
     return {
       success: result.success,
-      output: sanitizedOutput,
+      output: result.output,
+      label: result.label,
     }
   }
 
@@ -641,6 +634,28 @@ export class Orchestrator extends TypedEventEmitter {
   private formatToolTarget(args: Record<string, unknown>): string {
     const target = args.command ?? args.path ?? args.url ?? ''
     return String(target).slice(0, 100)
+  }
+
+  /**
+   * Redact secrets from tool args before sending to channel/logs.
+   * Prevents leaking secrets that users might paste into tool inputs.
+   */
+  private redactArgsSecrets(args: Record<string, unknown>): Record<string, unknown> {
+    const redacted: Record<string, unknown> = {}
+
+    for (const [key, value] of Object.entries(args)) {
+      if (typeof value === 'string') {
+        const { redacted: redactedValue } = secretDetector.redact(value)
+        redacted[key] = redactedValue
+      } else if (typeof value === 'object' && value !== null) {
+        // Recursively redact nested objects
+        redacted[key] = this.redactArgsSecrets(value as Record<string, unknown>)
+      } else {
+        redacted[key] = value
+      }
+    }
+
+    return redacted
   }
 
   /**
@@ -739,13 +754,58 @@ export class Orchestrator extends TypedEventEmitter {
     this.deps.channel.on('message', async (message: ChannelMessage) => {
       switch (message.type) {
         case 'user_message':
-          if (this.state === 'idle') {
-            await this.processMessage((message as UserMessage).content)
-          }
+          await this.handleIncomingMessage((message as UserMessage).content)
           break
         // Note: approval_response is no longer handled here
         // The ApprovalManager handles approval flow internally
       }
     })
+  }
+
+  /**
+   * Handle incoming user message with queueing.
+   * If busy, queues the message or replies "busy" if queue is full.
+   */
+  private async handleIncomingMessage(content: string): Promise<void> {
+    if (this.state === 'idle') {
+      await this.processMessage(content)
+      // Process any queued messages
+      await this.processQueuedMessages()
+    } else {
+      // Orchestrator is busy - queue the message
+      if (this.messageQueue.length < this.maxQueueSize) {
+        this.messageQueue.push(content)
+        await this.deps.channel.send({
+          type: 'assistant_message',
+          id: randomUUID(),
+          timestamp: new Date(),
+          sessionId: this.session.id,
+          content: `Your message has been queued (position ${this.messageQueue.length}). I'll respond once I finish processing the current request.`,
+        })
+      } else {
+        // Queue is full - reject the message
+        await this.deps.channel.send({
+          type: 'error',
+          id: randomUUID(),
+          timestamp: new Date(),
+          sessionId: this.session.id,
+          code: 'busy',
+          message: 'I am currently busy and my message queue is full. Please wait for the current request to complete.',
+          recoverable: true,
+        })
+      }
+    }
+  }
+
+  /**
+   * Process any queued messages after current turn completes.
+   */
+  private async processQueuedMessages(): Promise<void> {
+    while (this.messageQueue.length > 0 && this.state === 'idle') {
+      const nextMessage = this.messageQueue.shift()
+      if (nextMessage) {
+        await this.processMessage(nextMessage)
+      }
+    }
   }
 }

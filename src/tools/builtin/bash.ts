@@ -62,7 +62,11 @@ export const bashTool: ToolPlugin = {
 
     try {
       // Execute via sandbox (container if available, process otherwise)
-      const result = await context.sandbox.execute(command, 'bash')
+      // Pass workDir and timeout overrides if specified
+      const result = await context.sandbox.execute(command, 'bash', {
+        workDir: workDir ?? context.workDir,
+        timeout,
+      })
 
       // Format output
       let output = ''

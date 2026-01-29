@@ -155,7 +155,15 @@ describe('CLI Interaction E2E Tests', () => {
 
   afterEach(async () => {
     await channel.disconnect()
-    await fs.rm(testDir, { recursive: true, force: true })
+    // Allow async I/O to complete before cleanup
+    await new Promise((r) => setTimeout(r, 200))
+    try {
+      await fs.rm(testDir, { recursive: true, force: true })
+    } catch {
+      // Retry once after additional delay if first attempt fails
+      await new Promise((r) => setTimeout(r, 100))
+      await fs.rm(testDir, { recursive: true, force: true }).catch(() => {})
+    }
   })
 
   describe('Streaming Output', () => {

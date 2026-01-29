@@ -132,13 +132,15 @@ describe('ApprovalManager', () => {
       expect(callback).toHaveBeenCalledWith(request)
     })
 
-    it('defaults to auto-approve without callback', async () => {
+    it('defaults to deny-all without callback (fail-safe)', async () => {
+      // Security: ApprovalManager denies all requests by default
+      // Callers must explicitly provide an approval callback for interactive use
       const manager = new ApprovalManager()
       const context = createMockContext()
 
       const result = await manager.request(createRequest(), context)
 
-      expect(result).toBe(true)
+      expect(result).toBe(false)
     })
   })
 

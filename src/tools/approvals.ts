@@ -14,8 +14,9 @@ export class ApprovalManager {
   private callback: ApprovalCallback
 
   constructor(callback?: ApprovalCallback) {
-    // Default: auto-approve everything (for testing)
-    this.callback = callback ?? (async () => true)
+    // Default: DENY everything (fail-safe)
+    // Callers must explicitly provide an approval callback for interactive use
+    this.callback = callback ?? (async () => false)
   }
 
   /**
