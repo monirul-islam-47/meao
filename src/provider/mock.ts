@@ -18,6 +18,11 @@ export type MockResponseGenerator = (
 ) => MockResponse | Promise<MockResponse>
 
 /**
+ * Mock stream generator function for custom streaming events.
+ */
+export type MockStreamGenerator = () => Generator<StreamEvent, void, unknown> | AsyncGenerator<StreamEvent, void, unknown>
+
+/**
  * Mock response structure.
  */
 export interface MockResponse {
@@ -34,6 +39,8 @@ export interface MockProviderConfig {
   defaultResponse?: MockResponse
   /** Custom response generators */
   responseGenerators?: MockResponseGenerator[]
+  /** Custom stream generators for fine-grained streaming control */
+  streamGenerators?: MockStreamGenerator[]
   /** Simulate streaming delay between chunks (ms) */
   streamChunkDelay?: number
   /** Approximate tokens per character */
@@ -53,6 +60,7 @@ export class MockProvider implements Provider {
   private config: Required<MockProviderConfig>
   private requestCount = 0
   private lastRequestTime = 0
+  private streamGeneratorQueue: MockStreamGenerator[] = []
 
   constructor(config: MockProviderConfig = {}) {
     this.config = {
@@ -61,10 +69,12 @@ export class MockProvider implements Provider {
         stopReason: 'end_turn',
       },
       responseGenerators: config.responseGenerators ?? [],
+      streamGenerators: config.streamGenerators ?? [],
       streamChunkDelay: config.streamChunkDelay ?? 50,
       tokensPerChar: config.tokensPerChar ?? 0.25,
       rateLimit: config.rateLimit ?? { requestsPerMinute: 60, currentRequests: 0 },
     }
+    this.streamGeneratorQueue = [...this.config.streamGenerators]
   }
 
   /**
@@ -118,7 +128,17 @@ export class MockProvider implements Provider {
   ): AsyncIterable<StreamEvent> {
     this.checkRateLimit()
 
-    // Get the response
+    // Check for custom stream generators first (FIFO queue)
+    if (this.streamGeneratorQueue.length > 0) {
+      const streamGen = this.streamGeneratorQueue.shift()!
+      const generator = streamGen()
+      for await (const event of generator) {
+        yield event
+      }
+      return
+    }
+
+    // Get the response from regular generators
     let response: MockResponse = this.config.defaultResponse
     for (const generator of this.config.responseGenerators) {
       const generated = await generator(messages, options)
@@ -191,6 +211,14 @@ export class MockProvider implements Provider {
   }
 
   /**
+   * Add a stream generator for custom streaming events.
+   * Stream generators are consumed in FIFO order.
+   */
+  addStreamGenerator(generator: MockStreamGenerator): void {
+    this.streamGeneratorQueue.push(generator)
+  }
+
+  /**
    * Set the default response.
    */
   setDefaultResponse(response: MockResponse): void {
@@ -204,6 +232,7 @@ export class MockProvider implements Provider {
     this.requestCount = 0
     this.lastRequestTime = 0
     this.config.responseGenerators = []
+    this.streamGeneratorQueue = []
   }
 
   /**

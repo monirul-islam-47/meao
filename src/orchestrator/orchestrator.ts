@@ -25,6 +25,7 @@ import type {
 import type { ToolPlugin, ToolContext, ApprovalRequest } from '../tools/types.js'
 import { computeApprovalId } from '../tools/types.js'
 import { secretDetector } from '../security/secrets/index.js'
+import { ToolCallAssembler } from './tool-call-assembler.js'
 
 /**
  * Main orchestrator for coordinating conversations.
@@ -258,59 +259,126 @@ export class Orchestrator extends TypedEventEmitter {
     let currentBlockIndex = -1
     let currentText = ''
 
-    for await (const event of this.deps.provider.createMessageStream(
-      this.session.messages,
-      options
-    )) {
-      switch (event.type) {
-        case 'message_start':
-          if (event.message) {
-            responseId = event.message.id ?? ''
-            model = event.message.model ?? ''
-            if (event.message.usage) {
-              usage.inputTokens = event.message.usage.inputTokens ?? 0
+    // Tool call assembler for handling streamed tool calls
+    const toolAssembler = new ToolCallAssembler()
+    const toolCallBlocks = new Map<number, { id: string; name: string }>()
+
+    try {
+      for await (const event of this.deps.provider.createMessageStream(
+        this.session.messages,
+        options
+      )) {
+        switch (event.type) {
+          case 'message_start':
+            if (event.message) {
+              responseId = event.message.id ?? ''
+              model = event.message.model ?? ''
+              if (event.message.usage) {
+                usage.inputTokens = event.message.usage.inputTokens ?? 0
+              }
             }
-          }
-          break
+            break
 
-        case 'content_block_start':
-          currentBlockIndex = event.index ?? 0
-          if (event.contentBlock) {
-            content[currentBlockIndex] = event.contentBlock
-            if (event.contentBlock.type === 'text') {
-              currentText = ''
+          case 'content_block_start':
+            currentBlockIndex = event.index ?? 0
+            if (event.contentBlock) {
+              content[currentBlockIndex] = event.contentBlock
+
+              if (event.contentBlock.type === 'text') {
+                currentText = ''
+              } else if (event.contentBlock.type === 'tool_use') {
+                // Start tracking this tool call
+                const block = event.contentBlock as any
+                toolCallBlocks.set(currentBlockIndex, {
+                  id: block.id,
+                  name: block.name,
+                })
+                toolAssembler.startToolCall(block.id, block.name)
+              }
             }
-          }
-          break
+            break
 
-        case 'content_block_delta':
-          if (event.delta?.type === 'text' && (event.delta as any).text) {
-            const delta = (event.delta as any).text
-            currentText += delta
-            // Stream text to channel
-            await this.deps.channel.send({
-              type: 'stream_delta',
-              id: randomUUID(),
-              timestamp: new Date(),
-              sessionId: this.session.id,
-              streamId,
-              delta,
-            })
-          }
-          break
+          case 'content_block_delta':
+            if (event.delta?.type === 'text_delta' && (event.delta as any).text) {
+              // Handle text delta
+              const delta = (event.delta as any).text
+              currentText += delta
+              // Stream text to channel
+              await this.deps.channel.send({
+                type: 'stream_delta',
+                id: randomUUID(),
+                timestamp: new Date(),
+                sessionId: this.session.id,
+                streamId,
+                delta,
+              })
+            } else if (event.delta?.type === 'text' && (event.delta as any).text) {
+              // Alternative text delta format
+              const delta = (event.delta as any).text
+              currentText += delta
+              await this.deps.channel.send({
+                type: 'stream_delta',
+                id: randomUUID(),
+                timestamp: new Date(),
+                sessionId: this.session.id,
+                streamId,
+                delta,
+              })
+            } else if (event.delta?.type === 'input_json_delta') {
+              // Handle tool call JSON delta
+              const jsonDelta = (event.delta as any).partial_json ?? ''
+              const blockInfo = toolCallBlocks.get(currentBlockIndex)
+              if (blockInfo) {
+                toolAssembler.addDelta(blockInfo.id, jsonDelta)
+              }
+            }
+            break
 
-        case 'content_block_stop':
-          if (currentBlockIndex >= 0 && content[currentBlockIndex]?.type === 'text') {
-            (content[currentBlockIndex] as any).text = currentText
-          }
-          break
+          case 'content_block_stop':
+            if (currentBlockIndex >= 0) {
+              const block = content[currentBlockIndex]
+              if (block?.type === 'text') {
+                (block as any).text = currentText
+              } else if (block?.type === 'tool_use') {
+                // Finalize tool call JSON
+                const blockInfo = toolCallBlocks.get(currentBlockIndex)
+                if (blockInfo) {
+                  const result = toolAssembler.endToolCall(blockInfo.id)
+                  if (result.success) {
+                    // Update the content block with parsed input
+                    (block as any).input = result.toolCall.input
+                  } else {
+                    // Log error but don't throw - let the main loop handle it
+                    await this.deps.auditLogger.warn('streaming', 'tool_call_parse_error', {
+                      toolCallId: blockInfo.id,
+                      error: result.error.error,
+                    })
+                  }
+                }
+              }
+            }
+            break
 
-        case 'message_delta':
-          if ((event.delta as any)?.stop_reason) {
-            stopReason = (event.delta as any).stop_reason
-          }
-          break
+          case 'message_delta':
+            if ((event.delta as any)?.stop_reason) {
+              stopReason = (event.delta as any).stop_reason
+            }
+            // Track output tokens if provided
+            if ((event as any).usage?.output_tokens) {
+              usage.outputTokens = (event as any).usage.output_tokens
+            }
+            break
+        }
       }
+    } catch (error) {
+      // Handle stream errors - fail any incomplete tool calls
+      const failures = toolAssembler.failIncompleteCalls('Stream error: ' + (error as Error).message)
+      if (failures.length > 0) {
+        await this.deps.auditLogger.warn('streaming', 'incomplete_tool_calls', {
+          failures: failures.map((f) => ({ id: f.id, error: f.error })),
+        })
+      }
+      throw error
     }
 
     // Send stream end
